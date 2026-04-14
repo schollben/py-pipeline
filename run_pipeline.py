@@ -11,7 +11,7 @@ IS_SPONTANEOUS = True # True  → experiment has NO visual stimulus (spontaneous
 USE_INFERENCE = True # True  → use inference_results.h5
 DO_NEUROPIL = False # True  → extract and subtract neuropil signal from cell traces.
 DUR_RESP = 2.5 # Response window duration in seconds to build the trial-averaged response matrix (cyc)
-
+ 
 IS_2P_OPTO = True # True  → experiment includes 2-photon photostimulation (optogenetics), Will read MarkPoints XML and compute opto % change images
 OPTO_POST_SEC  = 0.5    # how long (sec) after the blanking window to average (response)
 OPTO_PRE_SEC   = 0.5    # how long (sec) before trigger onset to average (baseline)
