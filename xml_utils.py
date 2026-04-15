@@ -165,12 +165,19 @@ def parse_markpoints_xml(xml_path):
 
         galvo_elem = mp_elem.find('PVGalvoPointElement')
         if galvo_elem is not None:
+            # SpiralSizeInMicrons lives on each <Point>, not on the galvo element.
+            # Read it from the first Point as the representative size for this
+            # condition (all points in a group share the same spiral size).
+            first_pt = galvo_elem.find('Point')
+            spiral_size_um = (_safe_float(first_pt.get('SpiralSizeInMicrons', 0))
+                              if first_pt is not None else 0.0)
+
             condition['galvo'] = {
                 'initial_delay_ms':      _safe_float(galvo_elem.get('InitialDelay', 0)),
                 'inter_point_delay_ms':  _safe_float(galvo_elem.get('InterPointDelay', 0)),
                 'duration_ms':           _safe_float(galvo_elem.get('Duration', 0)),
                 'spiral_revolutions':    _safe_float(galvo_elem.get('SpiralRevolutions', 0)),
-                'spiral_size_microns':   _safe_float(galvo_elem.get('SpiralSizeInMicrons', 0)),
+                'spiral_size_microns':   spiral_size_um,
             }
 
             for pt in galvo_elem.findall('Point'):
@@ -182,6 +189,7 @@ def parse_markpoints_xml(xml_path):
                     'is_spiral':          pt.get('IsSpiral', 'False').lower() == 'true',
                     'spiral_width_norm':  _safe_float(pt.get('SpiralWidth', 0)),
                     'spiral_height_norm': _safe_float(pt.get('SpiralHeight', 0)),
+                    'spiral_size_microns': _safe_float(pt.get('SpiralSizeInMicrons', 0)),
                 })
 
         result['conditions'].append(condition)
@@ -280,7 +288,7 @@ def find_experiment_files(data_dir):
         'vrec_xml':       _first_or_none('*VoltageRecording*.xml'),
         'vrec_csv':       _first_or_none('*VoltageRecording*.csv'),
         'registered_h5':  _first_or_none('registered.h5'),
-        'inference_h5':   _first_or_none('inference_results.h5'),
+        'inference_h5':   _first_or_none('inference.h5'),
         'roi_zip':        _first_or_none('RoiSet.zip'),
     }
 

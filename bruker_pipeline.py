@@ -19,6 +19,7 @@ from glob import glob
 
 import numpy as np
 import h5py
+import tifffile
 import roifile
 from scipy.signal import medfilt, find_peaks
 from tqdm import tqdm
@@ -54,7 +55,8 @@ from xml_utils import (
 # ---------------------------------------------------------------------------
 BRUKER_ROOT    = '/mnt/bigdata/BRUKER'
 PSYCHOPY_ROOT  = '/mnt/bigdata/BRUKER_PSYCHOPY'
-DEFAULT_OUTPUT = '/mnt/PROCCESSED/'
+DEFAULT_OUTPUT = '/mnt/bigdata/PROCESSED/'
+
 
 
 # ===========================================================================
@@ -95,7 +97,7 @@ def process_experiment(
     is_2p_opto : bool
         True if dataset contains 2P photostimulation.
     use_inference : bool
-        True = use inference_results.h5, False = use registered.h5.
+        True = use inference.h5, False = use registered.h5.
     do_neuropil : bool
         True to extract and subtract neuropil signal.
     dur_resp : float
@@ -142,11 +144,22 @@ def process_experiment(
     result = {
         'experiment_id': experiment_id,
         'data_dir':      data_dir,
-        # flags
-        'is_spontaneous': is_spontaneous,
-        'is_2p_opto':     is_2p_opto,
-        'do_neuropil':    do_neuropil,
-        'do_plot':        do_plot,
+        # ── Processing inputs (all parameters passed by the user) ─────────
+        'date':               date,
+        'file_num':           file_num,
+        'stim_file_num':      stim_file,
+        'is_spontaneous':     is_spontaneous,
+        'is_2p_opto':         is_2p_opto,
+        'use_inference':      use_inference,
+        'do_neuropil':        do_neuropil,
+        'do_plot':            do_plot,
+        'dur_resp':           dur_resp,
+        'opto_post_sec':      opto_post_sec,
+        'opto_pre_sec':       opto_pre_sec,
+        'opto_blank_sec':     opto_blank_sec,
+        'opto_offset_trigger':opto_offset_trigger,
+        'chunk_size':         chunk_size,
+        'output_dir':         output_dir,
     }
 
     # -----------------------------------------------------------------------
@@ -225,7 +238,7 @@ def process_experiment(
     # -----------------------------------------------------------------------
     if use_inference:
         _require(files['inference_h5'],
-                 f'inference_results.h5 not found in {data_dir}')
+                 f'inference.h5 not found in {data_dir}')
         h5_path = files['inference_h5']
     else:
         _require(files['registered_h5'],
@@ -244,6 +257,46 @@ def process_experiment(
     # Frame time axis in seconds
     frame_times_sec = np.arange(num_frames) * frame_period
     result['frame_times_sec'] = frame_times_sec
+
+    # -----------------------------------------------------------------------
+    # Step 3b — MarkPoints pixel coordinates (computed now that image size is
+    #            known; done here regardless of vrec availability so that
+    #            spontaneous+opto experiments always populate these fields)
+    # -----------------------------------------------------------------------
+    for key in ('markpoints_xy_norm', 'markpoints_xy_pix',
+                'markpoints_condition_idx', 'markpoints_laser_power',
+                'markpoints_spiral_diameter_px'):
+        result[key] = None
+
+    if mp_data is not None:
+        px_line  = xml_params.get('pixels_per_line') or size_x
+        px_frame = xml_params.get('lines_per_frame')  or size_y
+        um_pp    = xml_params.get('microns_per_pixel') or 1.0
+
+        xy_norm_list        = []
+        cond_idx_list       = []
+        laser_powers        = []
+        spiral_diameters_px = []
+
+        for ci, cond in enumerate(mp_data['conditions']):
+            laser_powers.append(cond['uncaging_laser_power'])
+            spiral_um = cond['galvo'].get('spiral_size_microns', 25.0)
+            spiral_diameters_px.append(spiral_um / um_pp if um_pp else 25.0)
+            for pt in cond['points']:
+                xy_norm_list.append([pt['x_norm'], pt['y_norm']])
+                cond_idx_list.append(ci)
+
+        xy_norm = np.array(xy_norm_list)
+        xy_pix  = np.column_stack([
+            xy_norm[:, 0] * px_line,
+            xy_norm[:, 1] * px_frame,
+        ])
+
+        result['markpoints_xy_norm']            = xy_norm
+        result['markpoints_xy_pix']             = xy_pix
+        result['markpoints_condition_idx']      = np.array(cond_idx_list)
+        result['markpoints_laser_power']        = np.array(laser_powers)
+        result['markpoints_spiral_diameter_px'] = np.array(spiral_diameters_px)
 
     # -----------------------------------------------------------------------
     # Step 6 — Build cell masks
@@ -366,9 +419,11 @@ def process_experiment(
         vis_ch    = ch_layout['visual_trigger_ch']
         opto_ch   = ch_layout['photostim_ch']
 
-        if has_stim:
+        if has_stim and vis_ch is not None:
             # --- Detect visual stimulus onsets from vrec ---
-            vis_signal = medfilt(vrec[:, vis_ch], 101)
+            # Negate: hardware uses active-low (Gain=-1), so triggers are
+            # negative deflections. Negating converts them to positive peaks.
+            vis_signal = medfilt(-vrec[:, vis_ch], 101)
             vis_signal[vis_signal < 0] = 0
             vis_diff = np.diff(vis_signal)
 
@@ -385,55 +440,56 @@ def process_experiment(
             result['stim_off']     = stim_off
             result['stim_off_sec'] = stim_off_sec
 
-            # --- Read PsychoPy stimulus file ---
-            psychopy_date = _bruker_date_to_psychopy(experiment_id)
-            psychopy_path = os.path.join(
-                PSYCHOPY_ROOT, psychopy_date, f'T{stim_file:03d}.txt')
-            if not os.path.isfile(psychopy_path):
-                print(f'[WARNING] PsychoPy file not found: {psychopy_path}')
-                stim_id = None
+    # --- Read PsychoPy file whenever stim_file > -1, regardless of is_spontaneous ---
+    if stim_file > -1:
+        psychopy_date = _bruker_date_to_psychopy(experiment_id)
+        psychopy_path = os.path.join(
+            PSYCHOPY_ROOT, psychopy_date, f'T{stim_file:03d}.txt')
+        if not os.path.isfile(psychopy_path):
+            print(f'[WARNING] PsychoPy file not found: {psychopy_path}')
+        else:
+            print(f'Reading PsychoPy file: {psychopy_path}')
+            psychopy_data = np.genfromtxt(psychopy_path)
+            if psychopy_data.ndim == 1:
+                psychopy_data = psychopy_data[np.newaxis, :]
+
+            # Known acquisition bug: for 2P opto experiments the trigger
+            # stream is offset by one row relative to the psychopy file.
+            # Dropping row 0 realigns triggers → psychopy rows.
+            if is_2p_opto and opto_offset_trigger:
+                print(f'[opto_offset_trigger=True] Dropping first PsychoPy row '
+                      f'({psychopy_data.shape[0]} → {psychopy_data.shape[0] - 1} rows).')
+                psychopy_data = psychopy_data[1:]
+
+            if not is_2p_opto:
+                stim_id         = psychopy_data[:, 0]
+                stim_properties = psychopy_data[:, 1:]
+                result['stim_properties'] = stim_properties
             else:
-                psychopy_data = np.genfromtxt(psychopy_path)
-                if psychopy_data.ndim == 1:
-                    psychopy_data = psychopy_data[np.newaxis, :]
-
-                # Known acquisition bug: for 2P opto experiments the trigger
-                # stream is offset by one row relative to the psychopy file.
-                # Dropping row 0 realigns triggers → psychopy rows.
-                if is_2p_opto and opto_offset_trigger:
-                    print('[opto_offset_trigger=True] Dropping first PsychoPy '
-                          f'row (was: {psychopy_data.shape[0]} rows → '
-                          f'{psychopy_data.shape[0] - 1} rows).')
-                    psychopy_data = psychopy_data[1:]
-
-                if not is_2p_opto:
-                    stim_id         = psychopy_data[:, 0]
-                    stim_properties = psychopy_data[:, 1:]
-                    result['stim_properties'] = stim_properties
+                # 2P opto: columns are [target_number, target_trial, (stim_id), ...]
+                if psychopy_data.shape[1] >= 3:
+                    stim_id = psychopy_data[:, 2]
                 else:
-                    # 2P opto: columns are [target_number, target_trial, stim_id, ...]
-                    if psychopy_data.shape[1] == 2:
-                        stim_id = psychopy_data[:, 0]
-                    else:
-                        stim_id = psychopy_data[:, 2]
-                    result['target_number'] = psychopy_data[:, 0]
-                    result['target_trial']  = psychopy_data[:, 1]
-                    if psychopy_data.shape[1] > 3:
-                        result['stim_properties'] = psychopy_data[:, 3:]
+                    stim_id = psychopy_data[:, 0]
+                result['target_number'] = psychopy_data[:, 0]
+                result['target_trial']  = psychopy_data[:, 1]
+                if psychopy_data.shape[1] > 3:
+                    result['stim_properties'] = psychopy_data[:, 3:]
 
-                unique_stims = np.unique(stim_id)
-                result['stim_id']      = stim_id
-                result['unique_stims'] = unique_stims
+            result['stim_id']      = stim_id
+            result['unique_stims'] = np.unique(stim_id)
+            print(f'  {len(stim_id)} rows loaded, '
+                  f'{len(np.unique(stim_id))} unique stim IDs: {np.unique(stim_id).tolist()}')
 
-                # Validate trigger count
+            # For non-spontaneous experiments: validate trigger count and map to frames
+            if not is_spontaneous and result.get('stim_on') is not None:
+                stim_on = result['stim_on']
                 if len(stim_on) != len(stim_id):
                     print(f'[WARNING] Stim trigger mismatch: '
-                          f'{len(stim_on)} detected vs '
-                          f'{len(stim_id)} in stim file!')
+                          f'{len(stim_on)} detected vs {len(stim_id)} in stim file!')
                 else:
                     print(f'Stim triggers: {len(stim_on)} ✓')
 
-                # Map stim onsets to 2P frame indices
                 stim_on_2p_frame = np.array([
                     np.argmin(np.abs(s - frame_triggers))
                     for s in stim_on
@@ -501,15 +557,34 @@ def process_experiment(
         outfile.close()
 
     # -----------------------------------------------------------------------
+    # Step 11b — Load vrec for spontaneous + opto experiments
+    #             (when is_spontaneous=True the vrec block above was skipped,
+    #              but we still need the voltage recording to find photostim
+    #              triggers.  Load it here if not already loaded.)
+    # -----------------------------------------------------------------------
+    if is_2p_opto and vrec is None and files.get('vrec_csv'):
+        print('Loading voltage recording for opto trigger detection '
+              '(spontaneous experiment)...')
+        vrec = genfromtxt_with_progress(files['vrec_csv'],
+                                        delimiter=',', skip_header=1)
+        vrec_sample_rate = (vrec_meta['sample_rate'] if vrec_meta else 10000)
+        result['vrec']             = vrec
+        result['vrec_sample_rate'] = vrec_sample_rate
+
+        ch_layout = detect_vrec_channel_layout(vrec)
+        result['vrec_channel_layout'] = ch_layout['layout']
+        result['visual_trigger_ch']   = ch_layout['visual_trigger_ch']
+        result['photostim_ch']        = ch_layout['photostim_ch']
+
+    # -----------------------------------------------------------------------
     # Step 12 — 2P opto processing
     # -----------------------------------------------------------------------
-    # Initialise opto keys to None
+    # Initialise opto keys to None (markpoints_* keys are initialised in Step 3b
+    # and must NOT be reset here — they are populated regardless of vrec)
     for key in ('photostim_triggers', 'photostim_triggers_sec',
                 'photostim_2p_frame',
-                'markpoints_xy_norm', 'markpoints_xy_pix',
-                'markpoints_condition_idx', 'markpoints_laser_power',
                 'opto_stim_ids', 'opto_avg_images', 'opto_baseline_images',
-                'opto_delta_images', 'opto_n_trials',
+                'opto_delta_images', 'opto_trial_delta_images', 'opto_n_trials',
                 'opto_grand_avg_image', 'opto_grand_baseline_image',
                 'opto_grand_delta_image',
                 'opto_blank_sec', 'opto_blank_frames',
@@ -517,13 +592,14 @@ def process_experiment(
                 'opto_pre_sec', 'opto_pre_frames'):
         result[key] = None
 
-    if is_2p_opto and vrec is not None:
+    opto_ch = result.get('photostim_ch')
+    if is_2p_opto and vrec is not None and opto_ch is not None:
         vrec_sample_rate = result['vrec_sample_rate'] or 10000
-        opto_ch = result['photostim_ch']
 
         # Detect photostim triggers
+        # Negate: hardware active-low (Gain=-1), triggers are negative deflections
         print('Detecting photostimulation triggers...')
-        ps_signal = medfilt(vrec[:, opto_ch], 51)
+        ps_signal = medfilt(-vrec[:, opto_ch], 51)
         ps_signal[ps_signal < 0] = 0
         photostim_triggers, _ = find_peaks(
             ps_signal, distance=1e4,
@@ -548,32 +624,6 @@ def process_experiment(
         ], dtype=int)
         result['photostim_2p_frame'] = photostim_2p_frame
 
-        # MarkPoints coordinates
-        if mp_data is not None:
-            px_line  = xml_params['pixels_per_line'] or size_x
-            px_frame = xml_params['lines_per_frame']  or size_y
-
-            xy_norm_list = []
-            cond_idx_list = []
-            laser_powers  = []
-
-            for ci, cond in enumerate(mp_data['conditions']):
-                laser_powers.append(cond['uncaging_laser_power'])
-                for pt in cond['points']:
-                    xy_norm_list.append([pt['x_norm'], pt['y_norm']])
-                    cond_idx_list.append(ci)
-
-            xy_norm = np.array(xy_norm_list)
-            xy_pix  = np.column_stack([
-                xy_norm[:, 0] * px_line,
-                xy_norm[:, 1] * px_frame,
-            ])
-
-            result['markpoints_xy_norm']        = xy_norm
-            result['markpoints_xy_pix']         = xy_pix
-            result['markpoints_condition_idx']   = np.array(cond_idx_list)
-            result['markpoints_laser_power']     = np.array(laser_powers)
-
         # Per-stim-ID opto average images
         print('Computing per-stim-ID opto % change images...')
         opto_blank_frames = int(round(opto_blank_sec / frame_period))
@@ -589,27 +639,30 @@ def process_experiment(
             'opto_pre_frames':  opto_pre_frames,
         })
 
-        # Determine stim_id per photostim event
+        # stim_id is populated whenever stim_file > -1 (see PsychoPy read above)
         opto_stim_id = result.get('stim_id')
         if opto_stim_id is None or len(opto_stim_id) != len(photostim_triggers):
-            # Fall back: assign each trigger an ID of 0 (single condition)
-            print('[WARNING] Cannot match photostim triggers to stim IDs — '
-                  'treating all as stim_id=0.')
+            print(f'[WARNING] stim_id count ({len(opto_stim_id) if opto_stim_id is not None else 0}) '
+                  f'does not match photostim trigger count ({len(photostim_triggers)}) — '
+                  f'treating all triggers as stim_id=0.')
             opto_stim_id = np.zeros(len(photostim_triggers))
 
         opto_unique_ids = np.unique(opto_stim_id)
         n_opto_ids      = len(opto_unique_ids)
 
-        opto_avg_imgs      = np.zeros((n_opto_ids, size_x, size_y))
-        opto_baseline_imgs = np.zeros((n_opto_ids, size_x, size_y))
-        opto_n_trials_arr  = np.zeros(n_opto_ids, dtype=int)
-        n_skipped          = 0
+        opto_avg_imgs           = np.zeros((n_opto_ids, size_x, size_y))
+        opto_baseline_imgs      = np.zeros((n_opto_ids, size_x, size_y))
+        opto_n_trials_arr       = np.zeros(n_opto_ids, dtype=int)
+        opto_trial_delta_images = []   # list[ndarray (n_trials, sx, sy)] per stim_id
+        n_skipped               = 0
 
         for oi, sid in enumerate(tqdm(opto_unique_ids,
                                        desc='Opto avg images', ncols=75)):
             events = np.where(opto_stim_id == sid)[0]
-            post_acc, pre_acc, cnt = (np.zeros((size_x, size_y)),
-                                       np.zeros((size_x, size_y)), 0)
+            post_acc = np.zeros((size_x, size_y))
+            pre_acc  = np.zeros((size_x, size_y))
+            trial_deltas = []
+
             for ev in events:
                 f0 = photostim_2p_frame[ev]
                 pre_start  = f0 - opto_pre_frames
@@ -617,26 +670,50 @@ def process_experiment(
                 post_start = f0 + opto_blank_frames
                 post_stop  = f0 + opto_blank_frames + opto_post_frames
 
-                if (pre_start < 0 or post_stop > num_frames):
+                if pre_start < 0 or post_stop > num_frames:
                     n_skipped += 1
                     continue
 
-                pre_window  = h[dat_name][pre_start:pre_stop]
-                post_window = h[dat_name][post_start:post_stop]
-                pre_acc  += np.mean(pre_window,  axis=0)
-                post_acc += np.mean(post_window, axis=0)
-                cnt += 1
+                pre_img  = np.mean(h[dat_name][pre_start:pre_stop],  axis=0)
+                post_img = np.mean(h[dat_name][post_start:post_stop], axis=0)
+                pre_acc  += pre_img
+                post_acc += post_img
 
+                # Per-trial % change
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    trial_delta = np.where(
+                        pre_img != 0,
+                        (post_img / pre_img - 1.0) * 100.0,
+                        0.0,
+                    )
+                trial_deltas.append(trial_delta)
+
+            cnt = len(trial_deltas)
             if cnt > 0:
-                post_mean = post_acc / cnt
-                pre_mean  = pre_acc  / cnt
-                opto_avg_imgs[oi]      = post_mean
-                opto_baseline_imgs[oi] = pre_mean
+                opto_avg_imgs[oi]      = post_acc / cnt
+                opto_baseline_imgs[oi] = pre_acc  / cnt
             opto_n_trials_arr[oi] = cnt
+            opto_trial_delta_images.append(
+                np.stack(trial_deltas).astype(np.float32)
+                if trial_deltas else np.zeros((0, size_x, size_y), dtype=np.float32)
+            )
 
         if n_skipped:
             print(f'[WARNING] Skipped {n_skipped} edge photostim events '
                   f'(too close to recording boundaries).')
+
+        # Save per-trial images as TIFF stacks (one file per stim_id)
+        print('Saving per-trial TIFF stacks...')
+        for oi, sid in enumerate(opto_unique_ids):
+            stack = opto_trial_delta_images[oi]
+            if stack.shape[0] == 0:
+                continue
+            tif_path = os.path.join(
+                output_dir,
+                f'{experiment_id}_opto_group{int(sid)}_trials.tif')
+            tifffile.imwrite(tif_path, stack, imagej=True)
+            print(f'  Saved: {os.path.basename(tif_path)}  '
+                  f'({stack.shape[0]} trials)')
 
         # % change: (post / pre - 1) * 100
         with np.errstate(invalid='ignore', divide='ignore'):
@@ -667,10 +744,11 @@ def process_experiment(
         result['opto_avg_images']          = opto_avg_imgs
         result['opto_baseline_images']     = opto_baseline_imgs
         result['opto_delta_images']        = opto_delta_imgs
+        result['opto_trial_delta_images']  = opto_trial_delta_images  # list of (n_trials,sx,sy)
         result['opto_n_trials']            = opto_n_trials_arr
-        result['opto_grand_avg_image']     = opto_grand_avg       # (size_x, size_y)
-        result['opto_grand_baseline_image']= opto_grand_baseline  # (size_x, size_y)
-        result['opto_grand_delta_image']   = opto_grand_delta     # (size_x, size_y) % change
+        result['opto_grand_avg_image']     = opto_grand_avg
+        result['opto_grand_baseline_image']= opto_grand_baseline
+        result['opto_grand_delta_image']   = opto_grand_delta
 
     # -----------------------------------------------------------------------
     # Close H5 movie
@@ -678,14 +756,23 @@ def process_experiment(
     h.close()
 
     # -----------------------------------------------------------------------
-    # Step 13 — Visualization
+    # Step 13 — Save result dict to H5
     # -----------------------------------------------------------------------
-    if do_plot:
-        fig_path = os.path.join(output_dir, f'{experiment_id}_summary.png')
-        plot_experiment_summary(result, save_path=fig_path)
+    save_result_h5(result, output_dir)
 
     # -----------------------------------------------------------------------
-    # Step 14 — Print summary
+    # Step 14 — Visualization
+    # -----------------------------------------------------------------------
+    if do_plot:
+        fig1_path = os.path.join(output_dir, f'{experiment_id}_summary.png')
+        plot_experiment_summary(result, save_path=fig1_path)
+        if result.get('is_2p_opto') and result.get('opto_delta_images') is not None:
+            fig2_path = os.path.join(output_dir, f'{experiment_id}_opto_images.png')
+            plot_opto_images(result, save_path=fig2_path)
+        plt.show()   # display all figures simultaneously
+
+    # -----------------------------------------------------------------------
+    # Step 15 — Print summary
     # -----------------------------------------------------------------------
     print_experiment_summary(result)
 
@@ -698,73 +785,79 @@ def process_experiment(
 
 def detect_vrec_channel_layout(vrec, threshold=1.0):
     """
-    Determine whether the voltage recording uses the 'old' layout
-    (ch0=visual, ch1=photostim) or 'new' layout (ch1=visual, ch2=photostim).
+    Determine which vrec columns carry visual and photostimulation triggers.
 
-    Strategy: the visual-trigger channel has evenly-spaced pulses spread
-    across the whole experiment; the photostim channel has clustered bursts.
-    We use the coefficient of variation (CV) of inter-event intervals on
-    each candidate channel — lower CV → more regular → visual trigger.
+    The vrec array columns are: [Time(ms), Input0, Input1, Input2, ...]
+    Data channels start at column index 1.
 
-    Parameters
-    ----------
-    vrec : np.ndarray
-        Voltage recording array, shape (n_samples, n_channels).
-    threshold : float
-        Voltage threshold for detecting events (default 1.0 V).
+    Bruker hardware with Gain=-1 stores triggers as active-low pulses:
+    the signal rests near +5 V and dips negative when the trigger fires.
+    We negate before peak-finding so trigger events appear as positive peaks.
+
+    Strategy
+    --------
+    • Count events on each data channel (cols 1+).
+    • If only one channel has events → spontaneous opto (no visual stim),
+      that channel is the photostim channel.
+    • If multiple channels have events → lowest inter-event-interval CV is
+      the visual trigger (regular spacing); next is photostim (clustered).
+
+    Returned column indices are direct indices into the vrec array (i.e.
+    col 1 = Input 0, col 2 = Input 1, col 3 = Input 2).
 
     Returns
     -------
-    dict with keys: visual_trigger_ch (int), photostim_ch (int), layout (str)
+    dict with keys: visual_trigger_ch (int or None), photostim_ch (int or None),
+                    layout (str)
     """
-    n_ch = vrec.shape[1]
+    n_cols     = vrec.shape[1]
+    data_cols  = list(range(1, n_cols))   # skip col 0 = Time
 
-    def _cv_of_iei(ch_idx):
-        """Coefficient of variation of inter-event intervals on channel ch_idx."""
-        sig = medfilt(vrec[:, ch_idx], 51)
+    def _peaks(col_idx):
+        """Find peaks on the negated (active-low → active-high) signal."""
+        sig = -medfilt(vrec[:, col_idx], 51)
         sig[sig < 0] = 0
-        events, _ = find_peaks(np.diff(sig), distance=500, height=threshold * 0.5)
+        events, _ = find_peaks(sig, distance=500, height=threshold * 0.5)
+        return events
+
+    def _cv(events):
         if len(events) < 3:
-            return np.inf   # can't compute CV — treat as photostim
+            return np.inf
         iei = np.diff(events).astype(float)
         return iei.std() / iei.mean() if iei.mean() > 0 else np.inf
 
-    if n_ch < 2:
-        # Only one channel: can't distinguish
-        return {'visual_trigger_ch': 0, 'photostim_ch': None, 'layout': 'unknown'}
+    col_peaks = {c: _peaks(c) for c in data_cols}
+    col_n     = {c: len(col_peaks[c]) for c in data_cols}
+    col_cv    = {c: _cv(col_peaks[c]) for c in data_cols}
 
-    cv0 = _cv_of_iei(0)
-    cv1 = _cv_of_iei(1)
+    names = {c: f'Input{c - 1}' for c in data_cols}
+    print('Vrec events per channel:', {names[c]: col_n[c] for c in data_cols})
 
-    if n_ch >= 3:
-        # Decide between old (0/1) and new (1/2) layouts
-        cv2 = _cv_of_iei(2)
-        # Visual = channel with lowest CV among candidates {0, 1}
-        # In "new" layout ch0 is unused/noise, so cv0 will be high
-        if cv0 <= cv1:
-            # ch0 is more regular → old layout
-            layout = 'old'
-            vis_ch  = 0
-            opto_ch = 1
-        else:
-            # ch1 is more regular → new layout
-            layout = 'new'
-            vis_ch  = 1
-            opto_ch = 2
-    else:
-        # Only 2 channels: assume old layout
-        layout  = 'old'
-        vis_ch  = 0
-        opto_ch = 1 if n_ch > 1 else None
+    # Channels with at least 3 events, sorted by CV (most regular first)
+    active = sorted([c for c in data_cols if col_n[c] >= 3],
+                    key=lambda c: col_cv[c])
 
-    print(f'Vrec channel layout detected: {layout} '
-          f'(visual=ch{vis_ch}, photostim=ch{opto_ch})')
+    if len(active) == 0:
+        print('[WARNING] No trigger events detected on any vrec channel.')
+        return {'visual_trigger_ch': None, 'photostim_ch': None, 'layout': 'unknown'}
 
-    return {
-        'visual_trigger_ch': vis_ch,
-        'photostim_ch':      opto_ch,
-        'layout':            layout,
-    }
+    if len(active) == 1:
+        # Spontaneous opto — only one channel has events
+        opto_ch = active[0]
+        print(f'Single active channel → photostim=col{opto_ch} ({names[opto_ch]}), '
+              f'no visual trigger (spontaneous experiment)')
+        return {'visual_trigger_ch': None, 'photostim_ch': opto_ch,
+                'layout': 'spontaneous'}
+
+    # Multiple active channels: lowest CV = visual (regular), next = photostim
+    vis_ch  = active[0]
+    opto_ch = active[1]
+    layout  = ('old'  if vis_ch == 1 else
+               'new'  if vis_ch == 2 else 'custom')
+    print(f'Vrec layout: {layout}  '
+          f'(vis=col{vis_ch}/{names[vis_ch]}, opto=col{opto_ch}/{names[opto_ch]})')
+
+    return {'visual_trigger_ch': vis_ch, 'photostim_ch': opto_ch, 'layout': layout}
 
 
 # ===========================================================================
@@ -835,11 +928,15 @@ def print_experiment_summary(result):
         lines.append('  (no stimulus processing)')
 
     if result.get('is_2p_opto'):
-        ps_trig = result.get('photostim_triggers')
+        ps_trig  = result.get('photostim_triggers')
         opto_ids = result.get('opto_stim_ids')
-        opto_n  = result.get('opto_n_trials')
-        mp_pwr  = result.get('markpoints_laser_power')
-        mp_idx  = result.get('markpoints_condition_idx')
+        opto_n   = result.get('opto_n_trials')
+        mp_pwr   = result.get('markpoints_laser_power')
+        mp_idx   = result.get('markpoints_condition_idx')
+        xy_pix   = result.get('markpoints_xy_pix')
+        xy_norm  = result.get('markpoints_xy_norm')
+        diam_px  = result.get('markpoints_spiral_diameter_px')
+        um_pp    = result.get('microns_per_pixel') or 1.0
         lines += [
             '',
             '── 2P Optogenetics ───────────────────────',
@@ -847,16 +944,32 @@ def print_experiment_summary(result):
         ]
         if ps_trig is not None:
             lines.append(f'  Photostim triggers : {len(ps_trig)}')
+        else:
+            lines.append('  Photostim triggers : NOT DETECTED (check vrec/channel layout)')
         if opto_ids is not None:
             lines.append(f'  Unique stim IDs    : {len(opto_ids)}')
         if opto_n is not None:
             lines.append(f'  Trials per ID      : {opto_n.tolist()}')
         if mp_pwr is not None and mp_idx is not None:
             n_groups = len(mp_pwr)
+            lines.append(f'  MarkPoints groups  : {n_groups}')
             for gi in range(n_groups):
-                n_pts = int(np.sum(mp_idx == gi))
-                lines.append(f'  Markpoints (group {gi+1}): '
-                              f'{n_pts} targets  (power={mp_pwr[gi]:.0f} mW)')
+                mask   = (mp_idx == gi)
+                n_pts  = int(np.sum(mask))
+                pwr    = mp_pwr[gi]
+                d_px   = diam_px[gi] if diam_px is not None else None
+                d_um   = d_px * um_pp if d_px is not None else None
+                lines.append(f'  Group {gi+1}: {n_pts} target(s)  '
+                              f'power={pwr:.0f} mW  '
+                              + (f'diam={d_um:.1f} µm ({d_px:.1f} px)' if d_um else ''))
+                if xy_pix is not None and xy_norm is not None:
+                    pts_pix  = xy_pix[mask]
+                    pts_norm = xy_norm[mask]
+                    for pi, (pn, pp) in enumerate(zip(pts_norm, pts_pix)):
+                        lines.append(f'    Spot {pi+1}: norm=({pn[0]:.3f}, {pn[1]:.3f})  '
+                                     f'pix=({pp[0]:.1f}, {pp[1]:.1f})')
+        else:
+            lines.append('  MarkPoints         : NOT LOADED (check markpoints XML)')
 
     lines.append('=' * 44)
     print('\n'.join(lines))
@@ -868,54 +981,35 @@ def print_experiment_summary(result):
 
 def plot_experiment_summary(result, save_path=None):
     """
-    Generate a multi-panel diagnostic figure and optionally save it.
-
-    Panel 1 — ROI map (always)
-    Panel 2 — ROI map + MarkPoints (if is_2p_opto)
-    Panel 3 — Opto % change images per stim_id (if is_2p_opto)
+    Figure 1 — two panels side by side:
+      Left  : mean projection + ROI outlines + MarkPoints circles (if 2P opto)
+      Right : dF/F heatmap (cells × time) with colorbar
     """
-    is_2p_opto   = result.get('is_2p_opto', False)
-    avg_image    = result.get('avg_image')
-    mask2d       = result.get('mask2d')
-    is_soma      = result.get('is_soma')
-    is_dendrite  = result.get('is_dendrite')
-    is_spine     = result.get('is_spine')
-    opto_delta   = result.get('opto_delta_images')
-    opto_ids     = result.get('opto_stim_ids')
-    opto_n       = result.get('opto_n_trials')
-    xy_pix       = result.get('markpoints_xy_pix')
-    cond_idx     = result.get('markpoints_condition_idx')
-    laser_pwr    = result.get('markpoints_laser_power')
-    um_pp        = result.get('microns_per_pixel')
-    size_x       = avg_image.shape[0] if avg_image is not None else 512
-    size_y       = avg_image.shape[1] if avg_image is not None else 512
+    avg_image   = result.get('avg_image')
+    mask2d      = result.get('mask2d')
+    dff         = result.get('dff')
+    is_soma     = result.get('is_soma')
+    is_dendrite = result.get('is_dendrite')
+    is_spine    = result.get('is_spine')
+    is_2p_opto  = result.get('is_2p_opto', False)
+    xy_pix      = result.get('markpoints_xy_pix')
+    cond_idx    = result.get('markpoints_condition_idx')
+    laser_pwr   = result.get('markpoints_laser_power')
+    diam_px     = result.get('markpoints_spiral_diameter_px')
+    um_pp       = result.get('microns_per_pixel')
+    fp          = result.get('frame_period') or 0.033
+    size_x      = avg_image.shape[0] if avg_image is not None else 512
 
-    n_opto_ids = len(opto_ids) if opto_ids is not None else 0
-    n_cols_p3  = min(n_opto_ids, 5) if n_opto_ids > 0 else 0
-    n_rows_p3  = math.ceil(n_opto_ids / n_cols_p3) if n_cols_p3 > 0 else 0
-
-    # Decide figure layout
-    n_top_panels = 2 if is_2p_opto else 1
-    has_bottom   = is_2p_opto and n_opto_ids > 0
-
-    fig_h = 6 * (1 + (n_rows_p3 if has_bottom else 0))
-    fig   = plt.figure(figsize=(6 * n_top_panels, fig_h), constrained_layout=True)
-
-    if has_bottom:
-        gs_top = fig.add_gridspec(2, n_top_panels,
-                                   height_ratios=[1, n_rows_p3 * 0.8])
-        gs_bot = gs_top[1, :].subgridspec(n_rows_p3, n_cols_p3)
-    else:
-        gs_top = fig.add_gridspec(1, n_top_panels)
+    fig, (ax_roi, ax_dff) = plt.subplots(1, 2, figsize=(14, 6),
+                                          constrained_layout=True)
 
     # ------------------------------------------------------------------
-    # Panel 1 — ROI map
+    # Left panel — mean projection + ROIs + MarkPoints
     # ------------------------------------------------------------------
-    ax1 = fig.add_subplot(gs_top[0, 0])
     if avg_image is not None:
-        ax1.imshow(avg_image, cmap='gray', interpolation='nearest')
+        ax_roi.imshow(avg_image, cmap='gray', interpolation='nearest')
 
-    roi_colors = {'soma': 'cyan', 'dendrite': 'yellow', 'spine': 'magenta'}
+    roi_colors    = {'soma': 'cyan', 'dendrite': 'yellow', 'spine': 'magenta'}
     legend_patches = []
 
     if mask2d is not None:
@@ -928,87 +1022,218 @@ def plot_experiment_summary(result, save_path=None):
                 color = roi_colors['spine']
             else:
                 color = 'lime'
-            # Draw ROI outline as contour
-            contour_overlay = mask2d[cc].astype(float)
-            ax1.contour(contour_overlay, levels=[0.5], colors=[color],
-                        linewidths=0.6, alpha=0.8)
+            ax_roi.contour(mask2d[cc].astype(float), levels=[0.5],
+                           colors=[color], linewidths=0.6, alpha=0.8)
 
         for label, col in roi_colors.items():
-            legend_patches.append(mpatches.Patch(color=col, label=label.capitalize()))
+            legend_patches.append(mpatches.Patch(color=col,
+                                                  label=label.capitalize()))
+
+    # MarkPoints as filled, semi-transparent circles
+    if is_2p_opto and xy_pix is not None and cond_idx is not None:
+        n_groups  = (len(laser_pwr) if laser_pwr is not None
+                     else int(cond_idx.max()) + 1)
+        cmap_g    = plt.cm.get_cmap('tab10', n_groups)
+        mp_patches = []
+        for gi in range(n_groups):
+            pts    = xy_pix[cond_idx == gi]
+            radius = ((diam_px[gi] / 2) if diam_px is not None
+                      else 12)                # fallback 12 px radius
+            color  = cmap_g(gi)
+            label  = (f'Group {gi+1} ({laser_pwr[gi]:.0f} mW)'
+                      if laser_pwr is not None else f'Group {gi+1}')
+            for x, y in pts:
+                circ = plt.Circle((x, y), radius=radius,
+                                  color=color, alpha=0.45, zorder=5)
+                ax_roi.add_patch(circ)
+                # thin edge ring for visibility against bright background
+                ring = plt.Circle((x, y), radius=radius,
+                                  fill=False, edgecolor=color,
+                                  linewidth=1.2, alpha=0.9, zorder=6)
+                ax_roi.add_patch(ring)
+            mp_patches.append(mpatches.Patch(color=color, alpha=0.7,
+                                              label=label))
+        legend_patches.extend(mp_patches)
 
     if um_pp and size_x:
-        _draw_scale_bar(ax1, size_x, um_pp, bar_um=50)
+        _draw_scale_bar(ax_roi, size_x, um_pp, bar_um=50)
 
-    ax1.set_title('ROI Map')
-    ax1.axis('off')
+    ax_roi.set_xlim(0, avg_image.shape[1] if avg_image is not None else 512)
+    ax_roi.set_ylim(avg_image.shape[0] if avg_image is not None else 512, 0)
+    ax_roi.set_title('Mean projection  |  ROIs' +
+                     ('  |  MarkPoints' if is_2p_opto else ''))
+    ax_roi.axis('off')
     if legend_patches:
-        ax1.legend(handles=legend_patches, loc='lower right',
-                   fontsize=6, framealpha=0.5)
+        ax_roi.legend(handles=legend_patches, loc='lower right',
+                      fontsize=7, framealpha=0.6)
 
     # ------------------------------------------------------------------
-    # Panel 2 — ROI map + MarkPoints (2P opto only)
+    # Right panel — dF/F time series (first 10 cells)
     # ------------------------------------------------------------------
-    if is_2p_opto:
-        ax2 = fig.add_subplot(gs_top[0, 1])
-        if avg_image is not None:
-            ax2.imshow(avg_image, cmap='gray', interpolation='nearest')
-        # ROI outlines (same as panel 1)
-        if mask2d is not None:
-            for cc in range(mask2d.shape[0]):
-                ax2.contour(mask2d[cc].astype(float), levels=[0.5],
-                            colors=['gray'], linewidths=0.5, alpha=0.5)
+    if dff is not None and dff.size > 0:
+        n_frames, n_cells = dff.shape
+        t_axis   = np.arange(n_frames) * fp          # seconds
+        n_plot   = min(10, n_cells)
 
-        # Scatter MarkPoints
-        if xy_pix is not None and cond_idx is not None:
-            n_groups = (len(laser_pwr) if laser_pwr is not None
-                        else int(cond_idx.max()) + 1)
-            cmap_g   = plt.cm.get_cmap('tab10', n_groups)
-            mp_patches = []
-            for gi in range(n_groups):
-                pts = xy_pix[cond_idx == gi]
-                label = (f'Group {gi+1} ({laser_pwr[gi]:.0f} mW)'
-                         if laser_pwr is not None else f'Group {gi+1}')
-                ax2.scatter(pts[:, 0], pts[:, 1],
-                            s=80, marker='x', linewidths=2,
-                            color=cmap_g(gi), label=label, zorder=5)
-                mp_patches.append(
-                    mpatches.Patch(color=cmap_g(gi), label=label))
-            ax2.legend(handles=mp_patches, loc='lower right',
-                       fontsize=6, framealpha=0.6)
+        # Vertical spacing: use 2× the 99th-percentile absolute dF/F value
+        # so traces don't overlap under typical signal amplitudes.
+        spacing = 2.0 * np.nanpercentile(np.abs(dff[:, :n_plot]), 99)
+        spacing = max(spacing, 0.05)                  # floor so flat traces still separate
 
-        ax2.set_title('ROI Map + MarkPoints')
-        ax2.axis('off')
+        # Collect handles for a compact legend
+        trace_handles = []
+        for cc in range(n_plot):
+            offset = cc * spacing
+            line,  = ax_dff.plot(t_axis, dff[:, cc] + offset,
+                                 linewidth=0.6, color='black', alpha=0.75)
+            ax_dff.text(t_axis[-1], offset,
+                        f' {cc}', va='center', fontsize=6, color='black')
+        trace_handles.append(mpatches.Patch(color='black', label='dF/F traces'))
 
-    # ------------------------------------------------------------------
-    # Panel 3 — Opto % change images (2P opto only)
-    # ------------------------------------------------------------------
-    if has_bottom and opto_delta is not None:
-        vlim = np.nanpercentile(np.abs(opto_delta), 99)
-        for oi in range(n_opto_ids):
-            row = oi // n_cols_p3
-            col = oi %  n_cols_p3
-            ax  = fig.add_subplot(gs_bot[row, col])
-            im  = ax.imshow(opto_delta[oi], cmap='RdBu_r',
-                            vmin=-vlim, vmax=vlim, interpolation='nearest')
-            n_trials_str = (f', n={opto_n[oi]}'
-                            if opto_n is not None else '')
-            ax.set_title(f'stim_id={opto_ids[oi]:.0f}{n_trials_str}',
-                         fontsize=8)
-            ax.axis('off')
-        # Single shared colorbar
-        fig.colorbar(im, ax=fig.get_axes()[n_top_panels:],
-                     label='% change', fraction=0.02, pad=0.02)
+        # Visual stimulus onsets — vertical dashed lines (blue)
+        stim_on_sec = result.get('stim_on_sec')
+        if stim_on_sec is not None and len(stim_on_sec):
+            for t in stim_on_sec:
+                ax_dff.axvline(t, color='royalblue', linewidth=0.5,
+                               alpha=0.6, linestyle='--', zorder=2)
+            trace_handles.append(mpatches.Patch(color='royalblue',
+                                                label='Visual stim onset'))
+
+        # Photostim triggers — vertical solid lines (red)
+        ps_sec = result.get('photostim_triggers_sec')
+        if ps_sec is not None and len(ps_sec):
+            for t in ps_sec:
+                ax_dff.axvline(t, color='tomato', linewidth=0.5,
+                               alpha=0.5, linestyle='-', zorder=3)
+            trace_handles.append(mpatches.Patch(color='tomato',
+                                                label='Photostim trigger'))
+
+        ax_dff.set_xlabel('Time (s)')
+        ax_dff.set_ylabel('dF/F  (offset per cell)')
+        ax_dff.set_title(f'dF/F traces — first {n_plot} cells')
+        ax_dff.set_xlim(t_axis[0], t_axis[-1])
+        ax_dff.set_yticks([])          # offsets have no absolute meaning
+        if trace_handles:
+            ax_dff.legend(handles=trace_handles, loc='upper right',
+                          fontsize=7, framealpha=0.6)
+    else:
+        ax_dff.text(0.5, 0.5, 'dF/F not available',
+                    ha='center', va='center', transform=ax_dff.transAxes)
+        ax_dff.axis('off')
 
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f'Summary figure saved: {save_path}')
 
-    plt.show()
+
+def plot_opto_images(result, save_path=None):
+    """
+    Figure 2 — per-stim-ID grand-average % change images.
+    One subplot per unique opto stim_id. Shared red–blue colorscale,
+    0 % = white.
+    """
+    opto_delta = result.get('opto_delta_images')
+    opto_ids   = result.get('opto_stim_ids')
+    opto_n     = result.get('opto_n_trials')
+
+    if opto_delta is None or len(opto_delta) == 0:
+        print('[plot_opto_images] No opto delta images to plot.')
+        return
+
+    n_ids   = len(opto_ids)
+    n_cols  = min(n_ids, 5)
+    n_rows  = math.ceil(n_ids / n_cols)
+
+    # Shared symmetric colorscale across all panels
+    vlim = np.nanpercentile(np.abs(opto_delta), 99)
+    if vlim == 0:
+        vlim = 1.0
+
+    fig, axes = plt.subplots(n_rows, n_cols,
+                              figsize=(5 * n_cols, 4.5 * n_rows),
+                              constrained_layout=True,
+                              squeeze=False)
+
+    im = None
+    for oi in range(n_ids):
+        row = oi // n_cols
+        col = oi %  n_cols
+        ax  = axes[row, col]
+        im  = ax.imshow(opto_delta[oi], cmap='bwr',
+                        vmin=-vlim, vmax=vlim,
+                        interpolation='nearest')
+        n_str = f'  (n={opto_n[oi]})' if opto_n is not None else ''
+        ax.set_title(f'Group ID {opto_ids[oi]:.0f}{n_str}', fontsize=10)
+        ax.axis('off')
+
+    # Hide unused axes
+    for oi in range(n_ids, n_rows * n_cols):
+        axes[oi // n_cols, oi % n_cols].set_visible(False)
+
+    if im is not None:
+        fig.colorbar(im, ax=axes, label='% change from baseline',
+                     fraction=0.02, pad=0.02, shrink=0.6)
+
+    fig.suptitle(f'{result.get("experiment_id", "")} — '
+                 f'2P opto grand-average % change images', fontsize=11)
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f'Opto image figure saved: {save_path}')
 
 
 # ===========================================================================
 # Internal helpers
 # ===========================================================================
+
+def save_result_h5(result, output_dir):
+    """
+    Save all numpy arrays and scalars from the result dict to an H5 file.
+    Lists of arrays (e.g. opto_trial_delta_images) are saved as indexed
+    sub-groups. Strings are saved as attributes. None values are skipped.
+    """
+    eid     = result.get('experiment_id', 'experiment')
+    h5_path = os.path.join(output_dir, f'{eid}.h5')
+    with h5py.File(h5_path, 'w') as f:
+        _write_dict_to_h5(f, result)
+    print(f'Result saved: {h5_path}')
+
+
+def _write_dict_to_h5(group, d):
+    """
+    Recursively write a dict into an open h5py group.
+    Every key is always written — None values become empty datasets
+    marked with an attribute so callers know the field existed but
+    was not populated for this experiment.
+    """
+    for key, val in d.items():
+        if val is None:
+            # Write an empty placeholder so the key is always present in H5
+            ds = group.create_dataset(key, data=np.array([]))
+            ds.attrs['is_none'] = True
+        elif isinstance(val, np.ndarray):
+            group.create_dataset(key, data=val)
+        elif isinstance(val, dict):
+            sub = group.require_group(key)
+            _write_dict_to_h5(sub, val)
+        elif isinstance(val, list):
+            # e.g. opto_trial_delta_images: list of (n_trials, sx, sy)
+            sub = group.require_group(key)
+            for i, item in enumerate(val):
+                if isinstance(item, np.ndarray):
+                    sub.create_dataset(str(i), data=item)
+        elif isinstance(val, bool):
+            group.create_dataset(key, data=int(val))
+        elif isinstance(val, (int, float)):
+            group.create_dataset(key, data=val)
+        elif isinstance(val, str):
+            group.attrs[key] = val
+        else:
+            try:
+                group.attrs[key] = str(val)
+            except Exception:
+                pass
+
 
 def _require(path, msg):
     """Assert that a file path is not None and the file exists."""
