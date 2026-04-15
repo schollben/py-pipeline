@@ -72,9 +72,10 @@ def process_experiment(
     opto_post_sec  = 1.0,
     opto_pre_sec   = 0.5,
     opto_blank_sec = 0.4,
-    do_plot        = False,
-    chunk_size     = 1000,
-    output_dir     = DEFAULT_OUTPUT,
+    do_plot               = False,
+    opto_offset_trigger   = True,
+    chunk_size            = 1000,
+    output_dir            = DEFAULT_OUTPUT,
 ):
     """
     Process a single Bruker TSeries experiment and return a dict of all
@@ -104,6 +105,11 @@ def process_experiment(
         Blanking period after trigger onset (microscope shutter, ~400 ms).
     do_plot : bool
         True to generate and save a diagnostic summary figure.
+    opto_offset_trigger : bool
+        True (default) to discard the first row of the PsychoPy file for 2P
+        opto experiments. A known acquisition bug causes the trigger stream to
+        be offset by one: photostim trigger 0 corresponds to psychopy row 1,
+        trigger 1 to row 2, etc. Set to False once the bug is fixed upstream.
     chunk_size : int
         Number of frames to process at once during trace extraction.
     output_dir : str
@@ -376,6 +382,15 @@ def process_experiment(
                 if psychopy_data.ndim == 1:
                     psychopy_data = psychopy_data[np.newaxis, :]
 
+                # Known acquisition bug: for 2P opto experiments the trigger
+                # stream is offset by one row relative to the psychopy file.
+                # Dropping row 0 realigns triggers → psychopy rows.
+                if is_2p_opto and opto_offset_trigger:
+                    print('[opto_offset_trigger=True] Dropping first PsychoPy '
+                          f'row (was: {psychopy_data.shape[0]} rows → '
+                          f'{psychopy_data.shape[0] - 1} rows).')
+                    psychopy_data = psychopy_data[1:]
+
                 if not is_2p_opto:
                     stim_id         = psychopy_data[:, 0]
                     stim_properties = psychopy_data[:, 1:]
@@ -480,6 +495,8 @@ def process_experiment(
                 'markpoints_condition_idx', 'markpoints_laser_power',
                 'opto_stim_ids', 'opto_avg_images', 'opto_baseline_images',
                 'opto_delta_images', 'opto_n_trials',
+                'opto_grand_avg_image', 'opto_grand_baseline_image',
+                'opto_grand_delta_image',
                 'opto_blank_sec', 'opto_blank_frames',
                 'opto_post_sec', 'opto_post_frames',
                 'opto_pre_sec', 'opto_pre_frames'):
@@ -614,11 +631,31 @@ def process_experiment(
                 0.0,
             )
 
-        result['opto_stim_ids']       = opto_unique_ids
-        result['opto_avg_images']     = opto_avg_imgs
-        result['opto_baseline_images']= opto_baseline_imgs
-        result['opto_delta_images']   = opto_delta_imgs
-        result['opto_n_trials']       = opto_n_trials_arr
+        # Grand-average across all stim IDs (weighted by trial count)
+        weights = opto_n_trials_arr.astype(float)
+        if weights.sum() > 0:
+            w = weights / weights.sum()
+            opto_grand_avg      = np.tensordot(w, opto_avg_imgs,      axes=([0], [0]))
+            opto_grand_baseline = np.tensordot(w, opto_baseline_imgs, axes=([0], [0]))
+        else:
+            opto_grand_avg      = np.zeros((size_x, size_y))
+            opto_grand_baseline = np.zeros((size_x, size_y))
+
+        with np.errstate(invalid='ignore', divide='ignore'):
+            opto_grand_delta = np.where(
+                opto_grand_baseline != 0,
+                (opto_grand_avg / opto_grand_baseline - 1.0) * 100.0,
+                0.0,
+            )
+
+        result['opto_stim_ids']            = opto_unique_ids
+        result['opto_avg_images']          = opto_avg_imgs
+        result['opto_baseline_images']     = opto_baseline_imgs
+        result['opto_delta_images']        = opto_delta_imgs
+        result['opto_n_trials']            = opto_n_trials_arr
+        result['opto_grand_avg_image']     = opto_grand_avg       # (size_x, size_y)
+        result['opto_grand_baseline_image']= opto_grand_baseline  # (size_x, size_y)
+        result['opto_grand_delta_image']   = opto_grand_delta     # (size_x, size_y) % change
 
     # -----------------------------------------------------------------------
     # Close H5 movie
