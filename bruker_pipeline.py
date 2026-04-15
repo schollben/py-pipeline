@@ -62,7 +62,8 @@ DEFAULT_OUTPUT = '/mnt/PROCCESSED/'
 # ===========================================================================
 
 def process_experiment(
-    data_dir,
+    date,
+    file_num,
     stim_file      = -1,
     is_spontaneous = False,
     is_2p_opto     = False,
@@ -83,8 +84,10 @@ def process_experiment(
 
     Parameters
     ----------
-    data_dir : str
-        Full path to the TSeries folder.
+    date : str
+        Acquisition date in MMDDYYYY format, e.g. '04022026'.
+    file_num : int
+        TSeries number, e.g. 3 (zero-padded to 003 internally).
     stim_file : int
         PsychoPy T-file number (e.g. 3 → T003.txt). -1 = no stim file.
     is_spontaneous : bool
@@ -120,8 +123,20 @@ def process_experiment(
     dict
         All processed variables keyed as documented in PIPELINE_PLAN.md.
     """
-    data_dir   = data_dir.rstrip('/')
+    # Resolve the TSeries folder from date + file number
+    bruker_base = os.path.join(BRUKER_ROOT, '')
+    folder_list = get_target_folders_v2(bruker_base, date, file_num, 'TSeries')
+    if len(folder_list) == 0:
+        print(f'[ERROR] No TSeries folder found for date={date}, '
+              f'file_num={file_num:03d} in {bruker_base}')
+        sys.exit(1)
+    if len(folder_list) > 1:
+        print(f'[WARNING] Multiple folders matched — using first:\n'
+              + '\n'.join(f'  {f}' for f in folder_list))
+    data_dir      = folder_list[0]
     experiment_id = os.path.basename(data_dir)
+    print(f'Data folder: {data_dir}')
+
     os.makedirs(output_dir, exist_ok=True)
 
     result = {
