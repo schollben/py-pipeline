@@ -19,6 +19,7 @@ OPTO_PRE_SEC    = 0.2           # seconds before trigger onset to average (basel
 OPTO_BLANK_SEC  = 0.4           # seconds right after trigger (~400 ms shutter delay)
 
 DO_PLOT         = True          # True → generate and save a summary figure (ROIs, MarkPoints, opto images).
+DO_VREC_DIAG    = False         # True → plot first 60 s of all vrec channels with detected triggers marked.
 
 # Known acquisition bug: photostim trigger stream is offset by 1 row relative
 # to the PsychoPy file. Keep True until the bug is fixed in the acquisition software.
@@ -38,5 +39,6 @@ if __name__ == '__main__':
         opto_pre_sec         = OPTO_PRE_SEC,
         opto_blank_sec       = OPTO_BLANK_SEC,
         do_plot              = DO_PLOT,
+        do_vrec_diagnostic   = DO_VREC_DIAG,
         opto_offset_trigger  = OPTO_OFFSET,
     )

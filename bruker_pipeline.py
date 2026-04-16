@@ -76,6 +76,7 @@ def process_experiment(
     opto_pre_sec   = 0.5,
     opto_blank_sec = 0.4,
     do_plot               = False,
+    do_vrec_diagnostic    = False,
     opto_offset_trigger   = True,
     chunk_size            = 1000,
     output_dir            = DEFAULT_OUTPUT,
@@ -153,6 +154,7 @@ def process_experiment(
         'use_inference':      use_inference,
         'do_neuropil':        do_neuropil,
         'do_plot':            do_plot,
+        'do_vrec_diagnostic': do_vrec_diagnostic,
         'dur_resp':           dur_resp,
         'opto_post_sec':      opto_post_sec,
         'opto_pre_sec':       opto_pre_sec,
@@ -198,6 +200,71 @@ def process_experiment(
     vrec_meta = None
     if files['vrec_xml']:
         vrec_meta = parse_vrec_xml(files['vrec_xml'])
+
+    # -----------------------------------------------------------------------
+    # Step 2b — Vrec diagnostic early exit
+    # If do_vrec_diagnostic=True, load vrec + detect triggers, plot, and return
+    # without running any of the expensive processing steps.
+    # -----------------------------------------------------------------------
+    if do_vrec_diagnostic:
+        print('\n[do_vrec_diagnostic=True] Loading vrec and detecting triggers only...')
+        vrec = None
+        if files.get('vrec_csv'):
+            vrec = genfromtxt_with_progress(files['vrec_csv'], delimiter=',', skip_header=1)
+            vrec_sample_rate = (vrec_meta['sample_rate'] if vrec_meta else 10000)
+            result['vrec']            = vrec
+            result['vrec_sample_rate']= vrec_sample_rate
+            ch_layout = detect_vrec_channel_layout(vrec)
+            result['vrec_channel_layout'] = ch_layout['layout']
+            result['photostim_ch']        = ch_layout['photostim_ch']
+            # Visual triggers are irrelevant for spontaneous experiments
+            vis_ch = None if is_spontaneous else ch_layout['visual_trigger_ch']
+            result['visual_trigger_ch'] = vis_ch
+            opto_ch = ch_layout['photostim_ch']
+
+            # Visual triggers — rising-edge detection (positive pulses, not spontaneous)
+            if vis_ch is not None:
+                vis_signal = medfilt(vrec[:, vis_ch].astype(float), 51)
+                vis_signal[vis_signal < 0] = 0
+                vis_diff = np.diff(vis_signal)
+                stim_on, _ = find_peaks(vis_diff, distance=1e3,
+                                        height=(max(vis_diff) - max(vis_diff) * 0.9))
+                stim_off, _ = find_peaks(-vis_diff, distance=1e3,
+                                         height=(max(-vis_diff) - max(-vis_diff) * 0.9))
+                result['stim_on']      = stim_on
+                result['stim_on_sec']  = stim_on / vrec_sample_rate
+                result['stim_off']     = stim_off
+                result['stim_off_sec'] = stim_off / vrec_sample_rate
+
+            # Photostim triggers — direct peak detection (positive pulses)
+            if opto_ch is not None:
+                ps_signal = medfilt(vrec[:, opto_ch].astype(float), 51)
+                ps_signal[ps_signal < 0] = 0
+                photostim_triggers, _ = find_peaks(ps_signal, distance=1e4,
+                                                   height=(max(ps_signal) - max(ps_signal) * 0.9))
+                result['photostim_triggers']     = photostim_triggers
+                result['photostim_triggers_sec'] = photostim_triggers / vrec_sample_rate
+        else:
+            print('[WARNING] No vrec CSV found — cannot plot diagnostic.')
+
+        # PsychoPy file (for stim_id colouring)
+        if stim_file > -1:
+            psychopy_date = _bruker_date_to_psychopy(experiment_id)
+            psychopy_path = os.path.join(PSYCHOPY_ROOT, psychopy_date, f'T{stim_file:03d}.txt')
+            if os.path.isfile(psychopy_path):
+                psychopy_data = np.genfromtxt(psychopy_path)
+                if psychopy_data.ndim == 1:
+                    psychopy_data = psychopy_data[np.newaxis, :]
+                if is_2p_opto and opto_offset_trigger:
+                    psychopy_data = psychopy_data[1:]
+                stim_id = psychopy_data[:, 0]
+                result['stim_id']      = stim_id
+                result['unique_stims'] = np.unique(stim_id)
+
+        diag_path = os.path.join(output_dir, f'{experiment_id}_vrec_diagnostic.png')
+        plot_vrec_diagnostic(result, save_path=diag_path)
+        plt.show()
+        return result
 
     # -----------------------------------------------------------------------
     # Step 3 — Parse MarkPoints XML (if 2P opto)
@@ -421,9 +488,9 @@ def process_experiment(
 
         if has_stim and vis_ch is not None:
             # --- Detect visual stimulus onsets from vrec ---
-            # Negate: hardware uses active-low (Gain=-1), so triggers are
-            # negative deflections. Negating converts them to positive peaks.
-            vis_signal = medfilt(-vrec[:, vis_ch], 101)
+            # Triggers are positive pulses on Input 1 (col 2). Rising-edge
+            # detection: median-filter → zero negatives → diff → find positive peaks.
+            vis_signal = medfilt(vrec[:, vis_ch].astype(float), 51)
             vis_signal[vis_signal < 0] = 0
             vis_diff = np.diff(vis_signal)
 
@@ -573,8 +640,9 @@ def process_experiment(
 
         ch_layout = detect_vrec_channel_layout(vrec)
         result['vrec_channel_layout'] = ch_layout['layout']
-        result['visual_trigger_ch']   = ch_layout['visual_trigger_ch']
         result['photostim_ch']        = ch_layout['photostim_ch']
+        # Spontaneous experiment — visual trigger channel is not used
+        result['visual_trigger_ch']   = None
 
     # -----------------------------------------------------------------------
     # Step 12 — 2P opto processing
@@ -596,10 +664,9 @@ def process_experiment(
     if is_2p_opto and vrec is not None and opto_ch is not None:
         vrec_sample_rate = result['vrec_sample_rate'] or 10000
 
-        # Detect photostim triggers
-        # Negate: hardware active-low (Gain=-1), triggers are negative deflections
+        # Detect photostim triggers — direct peak detection on positive pulses
         print('Detecting photostimulation triggers...')
-        ps_signal = medfilt(-vrec[:, opto_ch], 51)
+        ps_signal = medfilt(vrec[:, opto_ch].astype(float), 51)
         ps_signal[ps_signal < 0] = 0
         photostim_triggers, _ = find_peaks(
             ps_signal, distance=1e4,
@@ -641,11 +708,18 @@ def process_experiment(
 
         # stim_id is populated whenever stim_file > -1 (see PsychoPy read above)
         opto_stim_id = result.get('stim_id')
-        if opto_stim_id is None or len(opto_stim_id) != len(photostim_triggers):
-            print(f'[WARNING] stim_id count ({len(opto_stim_id) if opto_stim_id is not None else 0}) '
-                  f'does not match photostim trigger count ({len(photostim_triggers)}) — '
-                  f'treating all triggers as stim_id=0.')
+        if opto_stim_id is None:
+            print(f'[WARNING] No stim_id available (stim_file=-1?) — '
+                  f'treating all {len(photostim_triggers)} triggers as stim_id=0.')
             opto_stim_id = np.zeros(len(photostim_triggers))
+        elif len(opto_stim_id) != len(photostim_triggers):
+            n_use = min(len(opto_stim_id), len(photostim_triggers))
+            print(f'[WARNING] stim_id count ({len(opto_stim_id)}) != photostim trigger count '
+                  f'({len(photostim_triggers)}) — using first {n_use} of each. '
+                  f'Check trigger detection distance parameter.')
+            opto_stim_id          = opto_stim_id[:n_use]
+            photostim_triggers    = photostim_triggers[:n_use]
+            photostim_2p_frame    = photostim_2p_frame[:n_use]
 
         opto_unique_ids = np.unique(opto_stim_id)
         n_opto_ids      = len(opto_unique_ids)
@@ -769,6 +843,12 @@ def process_experiment(
         if result.get('is_2p_opto') and result.get('opto_delta_images') is not None:
             fig2_path = os.path.join(output_dir, f'{experiment_id}_opto_images.png')
             plot_opto_images(result, save_path=fig2_path)
+
+    if do_vrec_diagnostic:
+        fig3_path = os.path.join(output_dir, f'{experiment_id}_vrec_diagnostic.png')
+        plot_vrec_diagnostic(result, save_path=fig3_path)
+
+    if do_plot or do_vrec_diagnostic:
         plt.show()   # display all figures simultaneously
 
     # -----------------------------------------------------------------------
@@ -790,17 +870,13 @@ def detect_vrec_channel_layout(vrec, threshold=1.0):
     The vrec array columns are: [Time(ms), Input0, Input1, Input2, ...]
     Data channels start at column index 1.
 
-    Bruker hardware with Gain=-1 stores triggers as active-low pulses:
-    the signal rests near +5 V and dips negative when the trigger fires.
-    We negate before peak-finding so trigger events appear as positive peaks.
+    Fixed channel assignment (hardware convention):
+      Input 0 (col 1) — reserved / other signals, ignored for trigger detection
+      Input 1 (col 2) — visual stimulus trigger (always)
+      Input 2+ (col 3+) — photostim trigger (first active channel found)
 
-    Strategy
-    --------
-    • Count events on each data channel (cols 1+).
-    • If only one channel has events → spontaneous opto (no visual stim),
-      that channel is the photostim channel.
-    • If multiple channels have events → lowest inter-event-interval CV is
-      the visual trigger (regular spacing); next is photostim (clustered).
+    Triggers are positive-going pulses. Rising-edge detection (diff) is used
+    for visual stim; direct peak detection is used for photostim.
 
     Returned column indices are direct indices into the vrec array (i.e.
     col 1 = Input 0, col 2 = Input 1, col 3 = Input 2).
@@ -810,52 +886,42 @@ def detect_vrec_channel_layout(vrec, threshold=1.0):
     dict with keys: visual_trigger_ch (int or None), photostim_ch (int or None),
                     layout (str)
     """
-    n_cols     = vrec.shape[1]
-    data_cols  = list(range(1, n_cols))   # skip col 0 = Time
+    n_cols = vrec.shape[1]
+    names  = {c: f'Input{c - 1}' for c in range(1, n_cols)}
 
-    def _peaks(col_idx):
-        """Find peaks on the negated (active-low → active-high) signal."""
-        sig = -medfilt(vrec[:, col_idx], 51)
+    def _n_events(col_idx):
+        """Count positive-going events on a channel."""
+        sig = medfilt(vrec[:, col_idx].astype(float), 51)
         sig[sig < 0] = 0
         events, _ = find_peaks(sig, distance=500, height=threshold * 0.5)
-        return events
+        return len(events)
 
-    def _cv(events):
-        if len(events) < 3:
-            return np.inf
-        iei = np.diff(events).astype(float)
-        return iei.std() / iei.mean() if iei.mean() > 0 else np.inf
+    # Count events on all data channels for diagnostic printout
+    event_counts = {c: _n_events(c) for c in range(1, n_cols)}
+    print('Vrec events per channel:', {names[c]: event_counts[c]
+                                       for c in range(1, n_cols)})
 
-    col_peaks = {c: _peaks(c) for c in data_cols}
-    col_n     = {c: len(col_peaks[c]) for c in data_cols}
-    col_cv    = {c: _cv(col_peaks[c]) for c in data_cols}
+    # Visual stim is always Input 1 (col 2)
+    vis_ch = 2 if n_cols > 2 else None
 
-    names = {c: f'Input{c - 1}' for c in data_cols}
-    print('Vrec events per channel:', {names[c]: col_n[c] for c in data_cols})
+    # Photostim: first active channel at col 3+ (Input 2+)
+    opto_ch = None
+    for c in range(3, n_cols):
+        if event_counts.get(c, 0) >= 3:
+            opto_ch = c
+            break
 
-    # Channels with at least 3 events, sorted by CV (most regular first)
-    active = sorted([c for c in data_cols if col_n[c] >= 3],
-                    key=lambda c: col_cv[c])
+    if vis_ch is not None and opto_ch is not None:
+        layout = 'standard'
+    elif opto_ch is not None:
+        layout = 'spontaneous'
+    else:
+        layout = 'unknown'
 
-    if len(active) == 0:
-        print('[WARNING] No trigger events detected on any vrec channel.')
-        return {'visual_trigger_ch': None, 'photostim_ch': None, 'layout': 'unknown'}
-
-    if len(active) == 1:
-        # Spontaneous opto — only one channel has events
-        opto_ch = active[0]
-        print(f'Single active channel → photostim=col{opto_ch} ({names[opto_ch]}), '
-              f'no visual trigger (spontaneous experiment)')
-        return {'visual_trigger_ch': None, 'photostim_ch': opto_ch,
-                'layout': 'spontaneous'}
-
-    # Multiple active channels: lowest CV = visual (regular), next = photostim
-    vis_ch  = active[0]
-    opto_ch = active[1]
-    layout  = ('old'  if vis_ch == 1 else
-               'new'  if vis_ch == 2 else 'custom')
     print(f'Vrec layout: {layout}  '
-          f'(vis=col{vis_ch}/{names[vis_ch]}, opto=col{opto_ch}/{names[opto_ch]})')
+          f'(vis=col{vis_ch}/{names.get(vis_ch, "?")} '
+          f'[Input 1 — fixed], '
+          f'opto=col{opto_ch}/{names.get(opto_ch, "none")})')
 
     return {'visual_trigger_ch': vis_ch, 'photostim_ch': opto_ch, 'layout': layout}
 
@@ -942,14 +1008,27 @@ def print_experiment_summary(result):
             '── 2P Optogenetics ───────────────────────',
             f'  is_2p_opto         : True',
         ]
+        # Trigger count vs stim file rows
+        stim_id_arr = result.get('stim_id')
+        n_stim_rows = len(stim_id_arr) if stim_id_arr is not None else None
+        opto_offset = result.get('opto_offset_trigger', False)
         if ps_trig is not None:
-            lines.append(f'  Photostim triggers : {len(ps_trig)}')
+            n_trig = len(ps_trig)
+            if n_stim_rows is not None:
+                match_sym = '✓' if n_trig == n_stim_rows else '✗ MISMATCH'
+                lines.append(f'  Photostim triggers : {n_trig}  (stim file rows: {n_stim_rows})  {match_sym}')
+                if n_trig != n_stim_rows:
+                    lines.append(f'    → adjust trigger detection distance if mismatch is large')
+            else:
+                lines.append(f'  Photostim triggers : {n_trig}')
         else:
             lines.append('  Photostim triggers : NOT DETECTED (check vrec/channel layout)')
         if opto_ids is not None:
-            lines.append(f'  Unique stim IDs    : {len(opto_ids)}')
+            lines.append(f'  Unique stim IDs    : {len(opto_ids)}  {opto_ids.tolist()}')
         if opto_n is not None:
-            lines.append(f'  Trials per ID      : {opto_n.tolist()}')
+            trial_str = opto_n.tolist()
+            offset_note = '  (±1 trial expected due to opto_offset_trigger)' if opto_offset else ''
+            lines.append(f'  Trials per ID      : {trial_str}{offset_note}')
         if mp_pwr is not None and mp_idx is not None:
             n_groups = len(mp_pwr)
             lines.append(f'  MarkPoints groups  : {n_groups}')
@@ -1007,7 +1086,8 @@ def plot_experiment_summary(result, save_path=None):
     # Left panel — mean projection + ROIs + MarkPoints
     # ------------------------------------------------------------------
     if avg_image is not None:
-        ax_roi.imshow(avg_image, cmap='gray', interpolation='nearest')
+        vmax = avg_image.max() / 2   # half-max clamp so dim structures are visible
+        ax_roi.imshow(avg_image, cmap='gray', interpolation='nearest', vmax=vmax)
 
     roi_colors    = {'soma': 'cyan', 'dendrite': 'yellow', 'spine': 'magenta'}
     legend_patches = []
@@ -1033,13 +1113,25 @@ def plot_experiment_summary(result, save_path=None):
     if is_2p_opto and xy_pix is not None and cond_idx is not None:
         n_groups  = (len(laser_pwr) if laser_pwr is not None
                      else int(cond_idx.max()) + 1)
-        cmap_g    = plt.cm.get_cmap('tab10', n_groups)
+        # Vivid, high-saturation color palette for up to 10 groups
+        _OPTO_COLORS = [
+            '#FF0000',  # red
+            '#FF7700',  # orange
+            '#FFD700',  # gold
+            '#00FF00',  # lime
+            '#00FFFF',  # cyan
+            '#0077FF',  # dodger blue
+            '#AA00FF',  # violet
+            '#FF00AA',  # hot pink
+            '#FF77FF',  # magenta-pink
+            '#00FF88',  # spring green
+        ]
         mp_patches = []
         for gi in range(n_groups):
             pts    = xy_pix[cond_idx == gi]
             radius = ((diam_px[gi] / 2) if diam_px is not None
                       else 12)                # fallback 12 px radius
-            color  = cmap_g(gi)
+            color  = _OPTO_COLORS[gi % len(_OPTO_COLORS)]
             label  = (f'Group {gi+1} ({laser_pwr[gi]:.0f} mW)'
                       if laser_pwr is not None else f'Group {gi+1}')
             for x, y in pts:
@@ -1180,6 +1272,128 @@ def plot_opto_images(result, save_path=None):
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f'Opto image figure saved: {save_path}')
+
+
+# ===========================================================================
+# Vrec diagnostic plot
+# ===========================================================================
+
+def plot_vrec_diagnostic(result, save_path=None):
+    """
+    Plot the full vrec trace (all channels, all time) with detected trigger
+    events overlaid. Channels are vertically offset so they don't overlap.
+
+    Parameters
+    ----------
+    result : dict
+        The pipeline result dict (must contain 'vrec' and related keys).
+    save_path : str or None
+        If given, save the figure to this path.
+    """
+    vrec           = result.get('vrec')
+    vis_ch         = result.get('visual_trigger_ch')
+    opto_ch        = result.get('photostim_ch')
+    stim_on        = result.get('stim_on')
+    photostim_trig = result.get('photostim_triggers')
+    stim_id_arr    = result.get('stim_id')
+    experiment_id  = result.get('experiment_id', '')
+
+    if vrec is None:
+        print('[vrec_diagnostic] No vrec data available — skipping.')
+        return
+
+    n_samples, n_cols = vrec.shape
+    data_cols = list(range(1, n_cols))   # skip col 0 = Time(ms)
+
+    # Full time axis in seconds
+    t_sec = vrec[:, 0] / 1000.0
+
+    fig, ax = plt.subplots(1, 1, figsize=(18, 5), constrained_layout=True)
+
+    _VIS_COLOR   = '#1E90FF'
+    _OPTO_COLORS = [
+        '#FF0000', '#FF7700', '#FFD700', '#00FF00', '#00FFFF',
+        '#0077FF', '#AA00FF', '#FF00AA', '#FF77FF', '#00FF88',
+    ]
+    _TRACE_COLORS = ['#333333', '#555555', '#777777', '#999999']
+
+    channel_names = {c: f'Input {c-1}' for c in data_cols}
+
+    # Vertical offset per channel based on full-trace range
+    signals = [vrec[:, col] for col in data_cols]
+    ranges  = [np.percentile(s, 99) - np.percentile(s, 1) for s in signals]
+    spacing = max(ranges) * 1.4 if max(ranges) > 0 else 1.0
+    offsets = {col: i * spacing for i, col in enumerate(data_cols)}
+
+    legend_handles = []
+
+    for i, col in enumerate(data_cols):
+        sig    = signals[i]
+        offset = offsets[col]
+        color  = _TRACE_COLORS[i % len(_TRACE_COLORS)]
+
+        role  = ' [visual]' if col == vis_ch else (' [photostim]' if col == opto_ch else '')
+        label = channel_names[col] + role
+
+        ax.plot(t_sec, sig + offset, color=color, linewidth=0.5, alpha=0.85)
+
+        # Channel label at left edge
+        ax.text(t_sec[0] - (t_sec[-1] * 0.005), offset, label,
+                ha='right', va='center', fontsize=8, color=color)
+
+        # Visual stim triggers
+        if col == vis_ch and stim_on is not None and len(stim_on):
+            t_t = t_sec[stim_on]
+            y_t = vrec[stim_on, col] + offset
+            h = ax.scatter(t_t, y_t, marker='v', s=60, color=_VIS_COLOR,
+                           zorder=5, label='Visual stim onset')
+            legend_handles.append(h)
+
+        # Photostim triggers coloured by stim_id
+        if col == opto_ch and photostim_trig is not None and len(photostim_trig):
+            if stim_id_arr is not None and len(stim_id_arr) >= len(photostim_trig):
+                ids     = stim_id_arr[:len(photostim_trig)]
+                unique_ids = np.unique(ids)
+                for ui, uid in enumerate(unique_ids):
+                    sel = ids == uid
+                    c   = _OPTO_COLORS[ui % len(_OPTO_COLORS)]
+                    t_t = t_sec[photostim_trig[sel]]
+                    y_t = vrec[photostim_trig[sel], col] + offset
+                    h = ax.scatter(t_t, y_t, marker='^', s=70, color=c,
+                                   zorder=5, label=f'Photostim ID {uid:.0f}')
+                    legend_handles.append(h)
+            else:
+                t_t = t_sec[photostim_trig]
+                y_t = vrec[photostim_trig, col] + offset
+                h = ax.scatter(t_t, y_t, marker='^', s=70,
+                               color=_OPTO_COLORS[0], zorder=5,
+                               label='Photostim trigger')
+                legend_handles.append(h)
+
+    ax.set_xlim(t_sec[0], t_sec[-1])
+    ax.set_xlabel('Time (s)', fontsize=9)
+    ax.set_yticks([])
+    ax.grid(axis='x', linewidth=0.4, alpha=0.4)
+    if legend_handles:
+        ax.legend(handles=legend_handles, fontsize=8, loc='upper right')
+
+    n_vis  = len(stim_on)        if stim_on        is not None else 0
+    n_opto = len(photostim_trig) if photostim_trig  is not None else 0
+    n_rows = len(stim_id_arr)    if stim_id_arr     is not None else '?'
+    match  = '✓' if isinstance(n_rows, int) and n_opto == n_rows else '✗'
+    dur    = f'{t_sec[-1]:.0f} s' if len(t_sec) else '?'
+    ax.set_title(
+        f'{experiment_id}  |  Vrec diagnostic  |  full trace ({dur})\n'
+        f'Visual triggers: {n_vis}    '
+        f'Photostim triggers: {n_opto}    '
+        f'Stim file rows: {n_rows}    '
+        f'Match: {match}',
+        fontsize=10
+    )
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f'Vrec diagnostic saved → {save_path}')
 
 
 # ===========================================================================
