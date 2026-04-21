@@ -389,6 +389,43 @@ def process_experiment(
     result['neuropil_mask'] = neuropil_mask
 
     # -----------------------------------------------------------------------
+    # Step 6b — ROI-to-MarkPoint overlap (if 2P opto)
+    # For each ROI find the markpoint whose stimulation circle has the greatest
+    # fractional overlap with that ROI mask.  The circle radius comes from the
+    # per-group spiral_diameter_px (index via cond_idx).
+    # -----------------------------------------------------------------------
+    roi_photostim_point   = np.full(num_cells, -1, dtype=int)
+    roi_photostim_group   = np.full(num_cells, -1, dtype=int)
+    roi_photostim_overlap = np.zeros(num_cells, dtype=float)
+
+    mp_xy   = result.get('markpoints_xy_pix')
+    mp_cidx = result.get('markpoints_condition_idx')
+    mp_diam = result.get('markpoints_spiral_diameter_px')
+
+    if mp_xy is not None and mp_cidx is not None and mp_diam is not None:
+        # Coordinate grids matching mask2d shape (size_x, size_y)
+        row_grid, col_grid = np.mgrid[0:size_x, 0:size_y]
+
+        for pi, (x_mp, y_mp) in enumerate(mp_xy):
+            gi     = mp_cidx[pi]
+            radius = mp_diam[gi] / 2.0
+            circle = (col_grid - x_mp) ** 2 + (row_grid - y_mp) ** 2 <= radius ** 2
+
+            for cc in range(num_cells):
+                roi_area = mask2d[cc].sum()
+                if roi_area == 0:
+                    continue
+                overlap = float((circle & (mask2d[cc] > 0.5)).sum()) / roi_area
+                if overlap > roi_photostim_overlap[cc]:
+                    roi_photostim_overlap[cc] = overlap
+                    roi_photostim_point[cc]   = pi
+                    roi_photostim_group[cc]   = gi
+
+    result['roi_photostim_point']   = roi_photostim_point   # (n_rois,) index into markpoints, -1=none
+    result['roi_photostim_group']   = roi_photostim_group   # (n_rois,) group index, -1=none
+    result['roi_photostim_overlap'] = roi_photostim_overlap # (n_rois,) fraction 0-1
+
+    # -----------------------------------------------------------------------
     # Step 7 — Extract raw traces
     # -----------------------------------------------------------------------
     raw_traces   = np.zeros((num_frames, num_cells))
@@ -1094,6 +1131,20 @@ def plot_experiment_summary(result, save_path=None):
     fp          = result.get('frame_period') or 0.033
     size_x      = avg_image.shape[0] if avg_image is not None else 512
 
+    # Vivid palette shared by ROI labels and MarkPoints circles
+    _OPTO_COLORS = [
+        '#FF0000',  # red
+        '#FF7700',  # orange
+        '#FFD700',  # gold
+        '#00FF00',  # lime
+        '#00FFFF',  # cyan
+        '#0077FF',  # dodger blue
+        '#AA00FF',  # violet
+        '#FF00AA',  # hot pink
+        '#FF77FF',  # magenta-pink
+        '#00FF88',  # spring green
+    ]
+
     fig, (ax_roi, ax_dff) = plt.subplots(1, 2, figsize=(14, 6),
                                           constrained_layout=True)
 
@@ -1106,6 +1157,8 @@ def plot_experiment_summary(result, save_path=None):
 
     roi_colors    = {'soma': 'cyan', 'dendrite': 'yellow', 'spine': 'magenta'}
     legend_patches = []
+
+    roi_ps_group = result.get('roi_photostim_group')  # (n_rois,) -1 = not stimulated
 
     if mask2d is not None:
         for cc in range(mask2d.shape[0]):
@@ -1120,6 +1173,22 @@ def plot_experiment_summary(result, save_path=None):
             ax_roi.contour(mask2d[cc].astype(float), levels=[0.5],
                            colors=[color], linewidths=0.6, alpha=0.8)
 
+            # ROI number label at mask centroid
+            pts = np.argwhere(mask2d[cc] > 0.5)
+            if len(pts) > 0:
+                cy, cx = pts.mean(axis=0)   # row → y, col → x
+                # If photostimulated, use the group color; otherwise white
+                gi = int(roi_ps_group[cc]) if roi_ps_group is not None else -1
+                if gi >= 0:
+                    txt_color = _OPTO_COLORS[gi % len(_OPTO_COLORS)]
+                else:
+                    txt_color = 'white'
+                ax_roi.text(cx, cy, str(cc + 1),
+                            ha='center', va='center',
+                            fontsize=4, color=txt_color,
+                            fontweight='bold',
+                            clip_on=True)
+
         for label, col in roi_colors.items():
             legend_patches.append(mpatches.Patch(color=col,
                                                   label=label.capitalize()))
@@ -1128,19 +1197,6 @@ def plot_experiment_summary(result, save_path=None):
     if is_2p_opto and xy_pix is not None and cond_idx is not None:
         n_groups  = (len(laser_pwr) if laser_pwr is not None
                      else int(cond_idx.max()) + 1)
-        # Vivid, high-saturation color palette for up to 10 groups
-        _OPTO_COLORS = [
-            '#FF0000',  # red
-            '#FF7700',  # orange
-            '#FFD700',  # gold
-            '#00FF00',  # lime
-            '#00FFFF',  # cyan
-            '#0077FF',  # dodger blue
-            '#AA00FF',  # violet
-            '#FF00AA',  # hot pink
-            '#FF77FF',  # magenta-pink
-            '#00FF88',  # spring green
-        ]
         mp_patches = []
         for gi in range(n_groups):
             pts    = xy_pix[cond_idx == gi]
