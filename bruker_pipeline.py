@@ -332,7 +332,9 @@ def process_experiment(
     # -----------------------------------------------------------------------
     for key in ('markpoints_xy_norm', 'markpoints_xy_pix',
                 'markpoints_condition_idx', 'markpoints_laser_power',
-                'markpoints_spiral_diameter_px'):
+                'markpoints_spiral_diameter_px',
+                'roi_photostim_point', 'roi_photostim_group', 'roi_photostim_overlap',
+                'markpoint_assigned_roi'):
         result[key] = None
 
     if mp_data is not None:
@@ -402,28 +404,52 @@ def process_experiment(
     mp_cidx = result.get('markpoints_condition_idx')
     mp_diam = result.get('markpoints_spiral_diameter_px')
 
+    markpoint_assigned_roi = np.full(len(mp_xy) if mp_xy is not None else 0, -1, dtype=int)
+
     if mp_xy is not None and mp_cidx is not None and mp_diam is not None:
-        # Coordinate grids matching mask2d shape (size_x, size_y)
+        n_points   = len(mp_xy)
         row_grid, col_grid = np.mgrid[0:size_x, 0:size_y]
 
+        # Build full overlap matrix: overlap_matrix[pi, cc] = fraction of ROI cc
+        # covered by the stimulation circle of markpoint pi.
+        overlap_matrix = np.zeros((n_points, num_cells))
         for pi, (x_mp, y_mp) in enumerate(mp_xy):
             gi     = mp_cidx[pi]
             radius = mp_diam[gi] / 2.0
             circle = (col_grid - x_mp) ** 2 + (row_grid - y_mp) ** 2 <= radius ** 2
-
             for cc in range(num_cells):
                 roi_area = mask2d[cc].sum()
                 if roi_area == 0:
                     continue
-                overlap = float((circle & (mask2d[cc] > 0.5)).sum()) / roi_area
-                if overlap > roi_photostim_overlap[cc]:
-                    roi_photostim_overlap[cc] = overlap
-                    roi_photostim_point[cc]   = pi
-                    roi_photostim_group[cc]   = gi
+                overlap_matrix[pi, cc] = float(
+                    (circle & (mask2d[cc] > 0.5)).sum()) / roi_area
 
-    result['roi_photostim_point']   = roi_photostim_point   # (n_rois,) index into markpoints, -1=none
-    result['roi_photostim_group']   = roi_photostim_group   # (n_rois,) group index, -1=none
-    result['roi_photostim_overlap'] = roi_photostim_overlap # (n_rois,) fraction 0-1
+        # Greedy one-to-one assignment: each markpoint wins at most 1 ROI and
+        # each ROI is won by at most 1 markpoint.  Process strongest overlaps first.
+        markpoint_assigned_roi = np.full(n_points,   -1, dtype=int)
+        assigned_point         = np.full(num_cells,  -1, dtype=int)
+
+        pairs = np.argwhere(overlap_matrix > 0)
+        if len(pairs):
+            scores = overlap_matrix[pairs[:, 0], pairs[:, 1]]
+            for idx in np.argsort(scores)[::-1]:
+                pi, cc = pairs[idx]
+                if markpoint_assigned_roi[pi] == -1 and assigned_point[cc] == -1:
+                    markpoint_assigned_roi[pi] = cc
+                    assigned_point[cc]         = pi
+
+        # Derive per-ROI arrays from the assignment
+        roi_photostim_point = assigned_point
+        for cc in range(num_cells):
+            pi = assigned_point[cc]
+            if pi >= 0:
+                roi_photostim_group[cc]   = mp_cidx[pi]
+                roi_photostim_overlap[cc] = overlap_matrix[pi, cc]
+
+    result['roi_photostim_point']   = roi_photostim_point    # (n_rois,) markpoint index, -1=none
+    result['roi_photostim_group']   = roi_photostim_group    # (n_rois,) group index, -1=none
+    result['roi_photostim_overlap'] = roi_photostim_overlap  # (n_rois,) overlap fraction 0-1
+    result['markpoint_assigned_roi']= markpoint_assigned_roi # (n_points,) ROI index, -1=none
 
     # -----------------------------------------------------------------------
     # Step 7 — Extract raw traces
