@@ -16,7 +16,7 @@ DUR_RESP        = 2             # Response window duration in seconds to build t
 IS_2P_OPTO      = True          # True  → experiment includes 2-photon photostimulation (optogenetics), Will read MarkPoints XML and compute opto % change images
 OPTO_POST_SEC   = 0.2           # seconds after the blanking window to average (response)
 OPTO_PRE_SEC    = 0.2           # seconds before trigger onset to average (baseline)
-OPTO_BLANK_SEC  = 0.4           # seconds right after trigger (~400 ms shutter delay)
+OPTO_BLANK_SEC  = 0.5           # seconds right after trigger (~400 ms shutter delay)
 
 DO_PLOT         = True          # True → generate and save a summary figure (ROIs, MarkPoints, opto images).
 DO_VREC_DIAG    = False         # True → plot first 60 s of all vrec channels with detected triggers marked.
