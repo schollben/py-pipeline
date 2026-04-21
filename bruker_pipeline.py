@@ -651,7 +651,7 @@ def process_experiment(
     # and must NOT be reset here — they are populated regardless of vrec)
     for key in ('photostim_triggers', 'photostim_triggers_sec',
                 'photostim_2p_frame',
-                'opto_stim_ids', 'opto_avg_images', 'opto_baseline_images',
+                'opto_stim_ids', 'opto_avg_images', 'opto_baseline_image',
                 'opto_delta_images', 'opto_trial_delta_images', 'opto_n_trials',
                 'opto_grand_avg_image', 'opto_grand_baseline_image',
                 'opto_grand_delta_image',
@@ -724,57 +724,74 @@ def process_experiment(
         opto_unique_ids = np.unique(opto_stim_id)
         n_opto_ids      = len(opto_unique_ids)
 
-        opto_avg_imgs           = np.zeros((n_opto_ids, size_x, size_y))
-        opto_baseline_imgs      = np.zeros((n_opto_ids, size_x, size_y))
-        opto_n_trials_arr       = np.zeros(n_opto_ids, dtype=int)
-        opto_trial_delta_images = []   # list[ndarray (n_trials, sx, sy)] per stim_id
-        n_skipped               = 0
+        # ── Pass 1: build a single global baseline from ALL pre-trigger windows ──
+        # This shared baseline removes trial-to-trial baseline noise from the
+        # delta images.  Events that are too close to the recording boundary are
+        # excluded from both passes.
+        print('Pass 1/2: accumulating global pre-trigger baseline...')
+        global_pre_acc  = np.zeros((size_x, size_y))
+        global_pre_cnt  = 0
+        valid_event_set = set()
 
-        for oi, sid in enumerate(tqdm(opto_unique_ids,
-                                       desc='Opto avg images', ncols=75)):
-            events = np.where(opto_stim_id == sid)[0]
-            post_acc = np.zeros((size_x, size_y))
-            pre_acc  = np.zeros((size_x, size_y))
-            trial_deltas = []
+        for ev in range(len(photostim_2p_frame)):
+            f0         = int(photostim_2p_frame[ev])
+            pre_start  = f0 - opto_pre_frames
+            post_stop  = f0 + opto_blank_frames + opto_post_frames
+            if pre_start < 0 or post_stop > num_frames:
+                continue
+            valid_event_set.add(ev)
+            global_pre_acc += np.mean(h[dat_name][pre_start:f0], axis=0)
+            global_pre_cnt += 1
 
-            for ev in events:
-                f0 = photostim_2p_frame[ev]
-                pre_start  = f0 - opto_pre_frames
-                pre_stop   = f0
-                post_start = f0 + opto_blank_frames
-                post_stop  = f0 + opto_blank_frames + opto_post_frames
+        if global_pre_cnt > 0:
+            global_baseline = global_pre_acc / global_pre_cnt
+        else:
+            global_baseline = np.ones((size_x, size_y), dtype=float)
+            print('[WARNING] No valid pre-trigger windows found; baseline set to 1.')
 
-                if pre_start < 0 or post_stop > num_frames:
-                    n_skipped += 1
-                    continue
-
-                pre_img  = np.mean(h[dat_name][pre_start:pre_stop],  axis=0)
-                post_img = np.mean(h[dat_name][post_start:post_stop], axis=0)
-                pre_acc  += pre_img
-                post_acc += post_img
-
-                # Per-trial % change
-                with np.errstate(invalid='ignore', divide='ignore'):
-                    trial_delta = np.where(
-                        pre_img != 0,
-                        (post_img / pre_img - 1.0) * 100.0,
-                        0.0,
-                    )
-                trial_deltas.append(trial_delta)
-
-            cnt = len(trial_deltas)
-            if cnt > 0:
-                opto_avg_imgs[oi]      = post_acc / cnt
-                opto_baseline_imgs[oi] = pre_acc  / cnt
-            opto_n_trials_arr[oi] = cnt
-            opto_trial_delta_images.append(
-                np.stack(trial_deltas).astype(np.float32)
-                if trial_deltas else np.zeros((0, size_x, size_y), dtype=np.float32)
-            )
-
+        n_skipped = len(photostim_2p_frame) - global_pre_cnt
         if n_skipped:
             print(f'[WARNING] Skipped {n_skipped} edge photostim events '
                   f'(too close to recording boundaries).')
+
+        # ── Pass 2: accumulate post images per stim_id; delta uses global baseline ──
+        print('Pass 2/2: computing per-stim-ID post averages...')
+        opto_avg_imgs           = np.zeros((n_opto_ids, size_x, size_y))
+        opto_n_trials_arr       = np.zeros(n_opto_ids, dtype=int)
+        opto_trial_delta_images = []   # list[ndarray (n_trials, sx, sy)] per stim_id
+
+        for oi, sid in enumerate(tqdm(opto_unique_ids,
+                                       desc='Opto avg images', ncols=75)):
+            events   = np.where(opto_stim_id == sid)[0]
+            post_acc = np.zeros((size_x, size_y))
+            trial_deltas = []
+
+            for ev in events:
+                if ev not in valid_event_set:
+                    continue   # already counted as skipped in pass 1
+                f0         = int(photostim_2p_frame[ev])
+                post_start = f0 + opto_blank_frames
+                post_stop  = f0 + opto_blank_frames + opto_post_frames
+                post_img   = np.mean(h[dat_name][post_start:post_stop], axis=0)
+                post_acc  += post_img
+
+                # Per-trial delta: (post - global_baseline) / global_baseline
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    trial_delta = np.where(
+                        global_baseline != 0,
+                        (post_img - global_baseline) / global_baseline,
+                        0.0,
+                    )
+                trial_deltas.append(trial_delta.astype(np.float32))
+
+            cnt = len(trial_deltas)
+            if cnt > 0:
+                opto_avg_imgs[oi] = post_acc / cnt
+            opto_n_trials_arr[oi] = cnt
+            opto_trial_delta_images.append(
+                np.stack(trial_deltas)
+                if trial_deltas else np.zeros((0, size_x, size_y), dtype=np.float32)
+            )
 
         # Save per-trial images as TIFF stacks (one file per stim_id)
         print('Saving per-trial TIFF stacks...')
@@ -789,39 +806,37 @@ def process_experiment(
             print(f'  Saved: {os.path.basename(tif_path)}  '
                   f'({stack.shape[0]} trials)')
 
-        # % change: (post / pre - 1) * 100
+        # Per-stim-ID % change: (post_avg - global_baseline) / global_baseline
         with np.errstate(invalid='ignore', divide='ignore'):
             opto_delta_imgs = np.where(
-                opto_baseline_imgs != 0,
-                (opto_avg_imgs / opto_baseline_imgs - 1.0) * 100.0,
+                global_baseline != 0,
+                (opto_avg_imgs - global_baseline) / global_baseline,
                 0.0,
             )
 
-        # Grand-average across all stim IDs (weighted by trial count)
+        # Grand-average post across all stim IDs (weighted by trial count)
         weights = opto_n_trials_arr.astype(float)
         if weights.sum() > 0:
             w = weights / weights.sum()
-            opto_grand_avg      = np.tensordot(w, opto_avg_imgs,      axes=([0], [0]))
-            opto_grand_baseline = np.tensordot(w, opto_baseline_imgs, axes=([0], [0]))
+            opto_grand_avg = np.tensordot(w, opto_avg_imgs, axes=([0], [0]))
         else:
-            opto_grand_avg      = np.zeros((size_x, size_y))
-            opto_grand_baseline = np.zeros((size_x, size_y))
+            opto_grand_avg = np.zeros((size_x, size_y))
 
         with np.errstate(invalid='ignore', divide='ignore'):
             opto_grand_delta = np.where(
-                opto_grand_baseline != 0,
-                (opto_grand_avg / opto_grand_baseline - 1.0) * 100.0,
+                global_baseline != 0,
+                (opto_grand_avg - global_baseline) / global_baseline,
                 0.0,
             )
 
         result['opto_stim_ids']            = opto_unique_ids
         result['opto_avg_images']          = opto_avg_imgs
-        result['opto_baseline_images']     = opto_baseline_imgs
+        result['opto_baseline_image']      = global_baseline          # single shared baseline
         result['opto_delta_images']        = opto_delta_imgs
         result['opto_trial_delta_images']  = opto_trial_delta_images  # list of (n_trials,sx,sy)
         result['opto_n_trials']            = opto_n_trials_arr
         result['opto_grand_avg_image']     = opto_grand_avg
-        result['opto_grand_baseline_image']= opto_grand_baseline
+        result['opto_grand_baseline_image']= global_baseline
         result['opto_grand_delta_image']   = opto_grand_delta
 
     # -----------------------------------------------------------------------
