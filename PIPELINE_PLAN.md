@@ -115,33 +115,46 @@ Scans the TSeries folder and returns paths for:
 ### Pipeline flow
 
 ```
-1.  find_experiment_files()
-2.  parse_tseries_xml()         → frame_period, optical_zoom, etc. from XML
-    parse_vrec_xml()            → sample_rate, channel info
-3.  parse_markpoints_xml()      → target X,Y coords (if is_2p_opto)
-4.  roifile.roiread()           → ROI classification
-5.  Open registered.h5 / inference_results.h5
-                                → avg_image (first 100 frames), frame_times_sec
-6.  gen_polyline_roi/in_polygon → mask2d, neuropil_mask
-7.  Chunked trace extraction    → raw_traces, raw_neuropil
-8.  filter_baseline_dF_comp()  → dff, dff_neuropil
-9.  BRANCH: is_spontaneous
-    └─ False:
-       read_xml_file()          → frame_triggers (in 10 kHz samples)
-       genfromtxt_with_progress → vrec
-       detect_vrec_channel_layout() → visual_trigger_ch, photostim_ch
-       find_peaks()             → stim_on, stim_off (samples + seconds)
-       PsychoPy file            → stim_id, target_number, target_trial
-       map stim onsets → stim_on_2p_frame
-10. (if has_stim) gen_stim_cyc(), compute_peak_resp(), stim_avg_images
-11. (if is_2p_opto)
-       detect photostim triggers → photostim_triggers_sec
-       map → photostim_2p_frame
-       convert markpoints → xy_pix
-       compute opto % change images per stim_id (with blank offset)
-12. (if do_plot) plot_experiment_summary() → saves PNG
-13. print_experiment_summary()
-14. return result dict
+1.   get_target_folders_v2()   → resolve TSeries folder from date + file_num
+2.   find_experiment_files()   → locate all experiment files
+3.   parse_tseries_xml()       → frame_period, optical_zoom, etc. from XML
+     parse_vrec_xml()          → sample_rate, channel info
+3b.  [if do_vrec_diagnostic]   → early exit: load vrec, detect triggers, plot, return
+4.   parse_markpoints_xml()    → target X,Y coords (if is_2p_opto)
+5.   roifile.roiread()         → ROI classification (soma / dendrite / spine)
+6.   Open registered.h5 / inference_results.h5
+                               → avg_image (first 100 frames), frame_times_sec
+6b.  MarkPoints → pixel coords → markpoints_xy_pix, markpoints_condition_idx, etc.
+     ROI–MarkPoint overlap     → roi_photostim_point/group/overlap, markpoint_assigned_roi
+7.   gen_polyline_roi/in_polygon → mask2d, neuropil_mask
+8.   Chunked trace extraction  → raw_traces, raw_neuropil
+9.   filter_baseline_dF_comp() → dff, dff_neuropil, dff_window_frames, dff_window_sec
+10.  BRANCH: is_spontaneous
+     └─ False:
+        read_xml_file()              → frame_triggers (in 10 kHz samples)
+        genfromtxt_with_progress     → vrec
+        detect_vrec_channel_layout() → visual_trigger_ch, photostim_ch, vrec_channel_layout
+        find_peaks()                 → stim_on, stim_off (samples + seconds)
+        PsychoPy file                → stim_id, unique_stims, stim_properties,
+                                       target_number, target_trial (opto only)
+        map stim onsets              → stim_on_2p_frame
+11.  (if has_stim) gen_stim_cyc(), compute_peak_resp()
+                               → cyc, resp, resps, resp_err, stim_avg_images
+11b. (if is_2p_opto and spontaneous) load vrec for opto trigger detection
+12.  (if is_2p_opto)
+        detect photostim triggers    → photostim_triggers, photostim_triggers_sec
+        map → photostim_2p_frame
+        Pass 1: global pre-trigger baseline → opto_baseline_image
+        Pass 2: per-stim-ID post averages   → opto_avg_images, opto_delta_images,
+                                              opto_trial_delta_images (TIFF stacks saved)
+        grand average                → opto_grand_avg_image, opto_grand_delta_image
+        per-trial dF/F matrix        → cyc_photostim_only (n_rois × n_groups × max_trials)
+13.  save_result_h5()          → write all arrays to {experiment_id}.h5
+14.  (if do_plot) plot_experiment_summary() → {experiment_id}_summary.png
+     (if is_2p_opto) plot_opto_images()     → {experiment_id}_opto_images.png
+     (if do_vrec_diagnostic) plot_vrec_diagnostic() → {experiment_id}_vrec_diagnostic.png
+15.  print_experiment_summary()
+16.  return result dict
 ```
 
 ---
@@ -188,7 +201,24 @@ result = {
     # Identity
     'experiment_id': str,
     'data_dir': str,
-    'date': str,               # from XML
+    'date': str,               # from XML (MMDDYYYY)
+
+    # Processing inputs (passed by user)
+    'file_num': int,
+    'stim_file_num': int,      # -1 = no stim file
+    'is_spontaneous': bool,
+    'is_2p_opto': bool,
+    'use_inference': bool,
+    'do_neuropil': bool,
+    'do_plot': bool,
+    'do_vrec_diagnostic': bool,
+    'dur_resp': float,
+    'opto_post_sec': float,
+    'opto_pre_sec': float,
+    'opto_blank_sec': float,
+    'opto_offset_trigger': bool,
+    'chunk_size': int,
+    'output_dir': str,
 
     # Acquisition parameters (all from XML)
     'frame_period': float,
@@ -203,73 +233,85 @@ result = {
     'pmt_gain': dict,
     'bit_depth': int,
 
-    # Flags
-    'is_spontaneous': bool,
-    'is_2p_opto': bool,
-    'do_neuropil': bool,
-    'do_plot': bool,
-
     # ROI data
     'n_rois': int,
     'is_dendrite': np.ndarray,     # (n_rois,) bool
-    'is_spine': np.ndarray,
-    'is_soma': np.ndarray,
+    'is_spine': np.ndarray,        # (n_rois,) bool
+    'is_soma': np.ndarray,         # (n_rois,) bool
     'mask2d': np.ndarray,          # (n_rois, size_x, size_y)
     'neuropil_mask': np.ndarray,   # (size_x, size_y)
 
     # Signals
     'raw_traces': np.ndarray,      # (n_frames, n_rois)
     'dff': np.ndarray,             # (n_frames, n_rois)
-    'raw_neuropil': np.ndarray,    # (n_frames,) — optional
-    'dff_neuropil': np.ndarray,    # (n_frames,) — optional
+    'dff_window_frames': int,      # baseline window length in frames
+    'dff_window_sec': float,       # baseline window length in seconds
+    'raw_neuropil': np.ndarray,    # (n_frames,) — only if do_neuropil=True
+    'dff_neuropil': np.ndarray,    # (n_frames,) — only if do_neuropil=True
 
     # Reference images
-    'avg_image': np.ndarray,       # (size_x, size_y)
+    'avg_image': np.ndarray,       # (size_x, size_y) mean of first 100 frames
 
     # Frame synchronization
-    'frame_triggers': np.ndarray,  # (n_frames,) in vrec samples
-    'frame_times_sec': np.ndarray, # (n_frames,) in seconds
-    'vrec': np.ndarray,            # (n_samples, n_channels)
-    'vrec_sample_rate': int,
-    'vrec_channel_layout': str,    # 'old' or 'new'
-    'visual_trigger_ch': int,
-    'photostim_ch': int,
+    'frame_triggers': np.ndarray,  # (n_frames,) 2P frame onset times in vrec samples (10 kHz)
+    'frame_times_sec': np.ndarray, # (n_frames,) frame onset times in seconds
+    'vrec_sample_rate': int,       # typically 10000 Hz
 
-    # Stimulus data (None if is_spontaneous)
-    'stim_on': np.ndarray,         # (n_events,) vrec sample indices
+    # Stimulus data (None if is_spontaneous or stim_file=-1)
+    'stim_on': np.ndarray,         # (n_events,) vrec sample indices of visual stim onsets
     'stim_on_sec': np.ndarray,     # (n_events,) seconds
-    'stim_off': np.ndarray,
-    'stim_off_sec': np.ndarray,
-    'stim_on_2p_frame': np.ndarray,
-    'stim_id': np.ndarray,
-    'unique_stims': np.ndarray,
-    'cyc': np.ndarray,             # (n_rois, n_stims, n_trials, resp_frames)
-    'resp': np.ndarray,            # (n_rois, n_stims)
-    'resps': np.ndarray,
-    'resp_err': np.ndarray,
-    'stim_avg_images': np.ndarray, # (n_stims, size_x, size_y)
+    'stim_off': np.ndarray,        # (n_events,) vrec sample indices of visual stim offsets
+    'stim_off_sec': np.ndarray,    # (n_events,) seconds
+    'stim_on_2p_frame': np.ndarray,# (n_events,) 2P frame index for each stim onset
+    'stim_id': np.ndarray,         # (n_trials,) stimulus identity from PsychoPy
+    'unique_stims': np.ndarray,    # sorted unique stim IDs
+    'stim_properties': np.ndarray, # (n_trials, n_props) extra PsychoPy columns (non-opto only)
+    'target_number': np.ndarray,   # (n_trials,) opto target number (2P opto only)
+    'target_trial': np.ndarray,    # (n_trials,) opto trial index (2P opto only)
+    'cyc': np.ndarray,             # (n_rois, n_stims, n_trials, resp_frames) trial-avg matrix
+    'resp': np.ndarray,            # (n_rois, n_stims) mean peak response
+    'resps': np.ndarray,           # (n_rois, n_stims, n_trials) per-trial peak response
+    'resp_err': np.ndarray,        # (n_rois, n_stims) SEM of peak response
+    'stim_avg_images': np.ndarray, # (n_stims, size_x, size_y) mean frame image per stim
 
     # 2P opto data (None if not is_2p_opto)
-    'photostim_triggers': np.ndarray,      # (n_events,) vrec samples
-    'photostim_triggers_sec': np.ndarray,
-    'photostim_2p_frame': np.ndarray,
-    'markpoints_xy_norm': np.ndarray,      # (n_points, 2) normalized 0-1
-    'markpoints_xy_pix': np.ndarray,       # (n_points, 2) pixel coords
-    'markpoints_condition_idx': np.ndarray,# (n_points,)
-    'markpoints_laser_power': np.ndarray,  # (n_conditions,) mW
-    'opto_stim_ids': np.ndarray,
-    'opto_avg_images': np.ndarray,         # (n_ids, size_x, size_y) post-trigger mean
-    'opto_baseline_images': np.ndarray,    # (n_ids, size_x, size_y) pre-trigger mean
-    'opto_delta_images': np.ndarray,       # (n_ids, size_x, size_y) % change
-    'opto_n_trials': np.ndarray,
+    'photostim_triggers': np.ndarray,       # (n_events,) vrec sample indices
+    'photostim_triggers_sec': np.ndarray,   # (n_events,) seconds
+    'photostim_2p_frame': np.ndarray,       # (n_events,) 2P frame index per trigger
+
+    # MarkPoints targets (populated from XML regardless of vrec; None if no XML)
+    'markpoints_xy_norm': np.ndarray,       # (n_points, 2) normalized 0–1 coords
+    'markpoints_xy_pix': np.ndarray,        # (n_points, 2) pixel coords
+    'markpoints_condition_idx': np.ndarray, # (n_points,) group index per point
+    'markpoints_laser_power': np.ndarray,   # (n_conditions,) uncaging power in mW
+    'markpoints_spiral_diameter_px': np.ndarray, # (n_conditions,) spiral diameter in pixels
+
+    # ROI–MarkPoint overlap (winner-takes-all per point)
+    'roi_photostim_point': np.ndarray,      # (n_rois,) markpoint index, -1=none
+    'roi_photostim_group': np.ndarray,      # (n_rois,) condition/group index, -1=none
+    'roi_photostim_overlap': np.ndarray,    # (n_rois,) fraction of ROI covered by spiral
+    'markpoint_assigned_roi': np.ndarray,   # (n_points,) ROI index, -1=none
+
+    # Opto images (None if not is_2p_opto)
+    'opto_stim_ids': np.ndarray,            # unique stim IDs present in photostim triggers
+    'opto_avg_images': np.ndarray,          # (n_ids, size_x, size_y) mean post-trigger image
+    'opto_baseline_image': np.ndarray,      # (size_x, size_y) single global pre-trigger baseline
+    'opto_delta_images': np.ndarray,        # (n_ids, size_x, size_y) % change = (post-baseline)/baseline
+    'opto_trial_delta_images': list,        # list[ndarray (n_trials, size_x, size_y)] per stim_id
+    'opto_n_trials': np.ndarray,            # (n_ids,) valid trial count per stim_id
+    'opto_grand_avg_image': np.ndarray,     # (size_x, size_y) trial-weighted average post image
+    'opto_grand_baseline_image': np.ndarray,# (size_x, size_y) same as opto_baseline_image
+    'opto_grand_delta_image': np.ndarray,   # (size_x, size_y) grand-average % change image
     'opto_blank_sec': float,
     'opto_blank_frames': int,
     'opto_post_sec': float,
     'opto_post_frames': int,
     'opto_pre_sec': float,
     'opto_pre_frames': int,
-    'target_number': np.ndarray,
-    'target_trial': np.ndarray,
+
+    # Per-trial dF/F opto response matrix (None if not is_2p_opto)
+    'cyc_photostim_only': np.ndarray,       # (n_rois, n_groups, max_trials) NaN-padded
+                                             # value = mean(post) - mean(pre) dF/F per trial
 }
 ```
 

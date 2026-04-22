@@ -264,6 +264,8 @@ def process_experiment(
         diag_path = os.path.join(output_dir, f'{experiment_id}_vrec_diagnostic.png')
         plot_vrec_diagnostic(result, save_path=diag_path)
         plt.show()
+        for _k in ('vrec', 'vrec_channel_layout', 'visual_trigger_ch', 'photostim_ch'):
+            result.pop(_k, None)
         return result
 
     # -----------------------------------------------------------------------
@@ -424,27 +426,27 @@ def process_experiment(
                 overlap_matrix[pi, cc] = float(
                     (circle & (mask2d[cc] > 0.5)).sum()) / roi_area
 
-        # Greedy one-to-one assignment: each markpoint wins at most 1 ROI and
-        # each ROI is won by at most 1 markpoint.  Process strongest overlaps first.
-        markpoint_assigned_roi = np.full(n_points,   -1, dtype=int)
-        assigned_point         = np.full(num_cells,  -1, dtype=int)
+        # Winner-takes-all: each markpoint claims the single ROI with the
+        # greatest overlap fraction.  If multiple markpoints claim the same ROI
+        # (e.g. duplicate target locations in the XML) the one with the higher
+        # overlap fraction wins.
+        markpoint_assigned_roi = np.full(n_points, -1, dtype=int)
+        for pi in range(n_points):
+            row  = overlap_matrix[pi, :]
+            best = int(np.argmax(row))
+            if row[best] > 0:
+                markpoint_assigned_roi[pi] = best
 
-        pairs = np.argwhere(overlap_matrix > 0)
-        if len(pairs):
-            scores = overlap_matrix[pairs[:, 0], pairs[:, 1]]
-            for idx in np.argsort(scores)[::-1]:
-                pi, cc = pairs[idx]
-                if markpoint_assigned_roi[pi] == -1 and assigned_point[cc] == -1:
-                    markpoint_assigned_roi[pi] = cc
-                    assigned_point[cc]         = pi
-
-        # Derive per-ROI arrays from the assignment
-        roi_photostim_point = assigned_point
-        for cc in range(num_cells):
-            pi = assigned_point[cc]
-            if pi >= 0:
-                roi_photostim_group[cc]   = mp_cidx[pi]
-                roi_photostim_overlap[cc] = overlap_matrix[pi, cc]
+        # Derive per-ROI arrays (highest-overlap markpoint wins each ROI)
+        roi_photostim_point = np.full(num_cells, -1, dtype=int)
+        for pi in range(n_points):
+            cc = markpoint_assigned_roi[pi]
+            if cc >= 0:
+                ov = overlap_matrix[pi, cc]
+                if ov > roi_photostim_overlap[cc]:
+                    roi_photostim_point[cc]   = pi
+                    roi_photostim_group[cc]   = mp_cidx[pi]
+                    roi_photostim_overlap[cc] = ov
 
     result['roi_photostim_point']   = roi_photostim_point    # (n_rois,) markpoint index, -1=none
     result['roi_photostim_group']   = roi_photostim_group    # (n_rois,) group index, -1=none
@@ -509,15 +511,15 @@ def process_experiment(
     has_stim = (stim_file > -1) and (not is_spontaneous)
 
     # Initialise stimulus keys to None so they always exist in the dict
-    for key in ('frame_triggers', 'vrec', 'vrec_sample_rate',
-                'vrec_channel_layout', 'visual_trigger_ch', 'photostim_ch',
+    for key in ('frame_triggers', 'vrec_sample_rate',
                 'stim_on', 'stim_on_sec', 'stim_off', 'stim_off_sec',
                 'stim_on_2p_frame', 'stim_id', 'unique_stims',
                 'stim_properties', 'target_number', 'target_trial',
                 'cyc', 'resp', 'resps', 'resp_err', 'stim_avg_images'):
         result[key] = None
 
-    vrec = None   # needed later for opto
+    vrec    = None   # needed later for opto
+    opto_ch = None   # set in whichever branch loads the vrec
 
     if not is_spontaneous:
         # --- Frame triggers from XML ---
@@ -537,17 +539,12 @@ def process_experiment(
                                         delimiter=',', skip_header=1)
         vrec_sample_rate = (vrec_meta['sample_rate']
                             if vrec_meta else 10000)
-        result['vrec']             = vrec
         result['vrec_sample_rate'] = vrec_sample_rate
 
         # --- Auto-detect channel layout ---
         ch_layout = detect_vrec_channel_layout(vrec)
-        result['vrec_channel_layout'] = ch_layout['layout']
-        result['visual_trigger_ch']   = ch_layout['visual_trigger_ch']
-        result['photostim_ch']        = ch_layout['photostim_ch']
-
-        vis_ch    = ch_layout['visual_trigger_ch']
-        opto_ch   = ch_layout['photostim_ch']
+        vis_ch  = ch_layout['visual_trigger_ch']
+        opto_ch = ch_layout['photostim_ch']
 
         if has_stim and vis_ch is not None:
             # --- Detect visual stimulus onsets from vrec ---
@@ -698,14 +695,10 @@ def process_experiment(
         vrec = genfromtxt_with_progress(files['vrec_csv'],
                                         delimiter=',', skip_header=1)
         vrec_sample_rate = (vrec_meta['sample_rate'] if vrec_meta else 10000)
-        result['vrec']             = vrec
         result['vrec_sample_rate'] = vrec_sample_rate
 
         ch_layout = detect_vrec_channel_layout(vrec)
-        result['vrec_channel_layout'] = ch_layout['layout']
-        result['photostim_ch']        = ch_layout['photostim_ch']
-        # Spontaneous experiment — visual trigger channel is not used
-        result['visual_trigger_ch']   = None
+        opto_ch = ch_layout['photostim_ch']
 
     # -----------------------------------------------------------------------
     # Step 12 — 2P opto processing
@@ -720,10 +713,10 @@ def process_experiment(
                 'opto_grand_delta_image',
                 'opto_blank_sec', 'opto_blank_frames',
                 'opto_post_sec', 'opto_post_frames',
-                'opto_pre_sec', 'opto_pre_frames'):
+                'opto_pre_sec', 'opto_pre_frames',
+                'cyc_photostim_only'):
         result[key] = None
 
-    opto_ch = result.get('photostim_ch')
     if is_2p_opto and vrec is not None and opto_ch is not None:
         vrec_sample_rate = result['vrec_sample_rate'] or 10000
 
@@ -803,7 +796,7 @@ def process_experiment(
             if pre_start < 0 or post_stop > num_frames:
                 continue
             valid_event_set.add(ev)
-            global_pre_acc += np.mean(h[dat_name][pre_start:f0], axis=0)
+            global_pre_acc += np.mean(h[dat_name][pre_start:f0-1], axis=0)
             global_pre_cnt += 1
 
         if global_pre_cnt > 0:
@@ -901,6 +894,35 @@ def process_experiment(
         result['opto_grand_avg_image']     = opto_grand_avg
         result['opto_grand_baseline_image']= global_baseline
         result['opto_grand_delta_image']   = opto_grand_delta
+
+        # ── cyc_photostim_only: (n_cells, n_groups, max_trials) ─────────────
+        # Per-trial, per-cell dF/F response = mean(post-blank) - mean(pre)
+        # using opto_post_sec window.  NaN-padded where a group has fewer
+        # trials than the maximum across groups.
+        print('Computing cyc_photostim_only (cells × groups × trials)...')
+        dff_arr = result['dff']   # (n_frames, n_cells)
+        trial_resps = []          # one list per group, each entry shape (n_cells,)
+        for oi, sid in enumerate(opto_unique_ids):
+            events = np.where(opto_stim_id == sid)[0]
+            group_trials = []
+            for ev in events:
+                if ev not in valid_event_set:
+                    continue
+                f0         = int(photostim_2p_frame[ev])
+                pre_start  = f0 - opto_pre_frames
+                post_start = f0 + opto_blank_frames
+                post_stop  = f0 + opto_blank_frames + opto_post_frames
+                baseline   = np.mean(dff_arr[pre_start:f0], axis=0)   # (n_cells,)
+                response   = np.mean(dff_arr[post_start:post_stop], axis=0)
+                group_trials.append(response - baseline)
+            trial_resps.append(group_trials)
+
+        max_trials = max((len(g) for g in trial_resps), default=0)
+        cyc_ps = np.full((num_cells, n_opto_ids, max_trials), np.nan, dtype=np.float32)
+        for oi, group_trials in enumerate(trial_resps):
+            for ti, resp in enumerate(group_trials):
+                cyc_ps[:, oi, ti] = resp
+        result['cyc_photostim_only'] = cyc_ps
 
     # -----------------------------------------------------------------------
     # Close H5 movie
@@ -1055,12 +1077,8 @@ def print_experiment_summary(result):
 
     stim_id  = result.get('stim_id')
     stim_on  = result.get('stim_on')
-    layout   = result.get('vrec_channel_layout', '?')
-    vis_ch   = result.get('visual_trigger_ch', '?')
-    opto_ch  = result.get('photostim_ch', '?')
 
     if stim_on is not None:
-        lines.append(f'  Vrec layout   : {layout}  (vis=ch{vis_ch}, opto=ch{opto_ch})')
         lines.append(f'  Stim triggers : {len(stim_on)}')
         if stim_id is not None:
             match = '✓' if len(stim_on) == len(stim_id) else '✗ MISMATCH'
@@ -1211,7 +1229,7 @@ def plot_experiment_summary(result, save_path=None):
                     txt_color = 'white'
                 ax_roi.text(cx, cy, str(cc + 1),
                             ha='center', va='center',
-                            fontsize=4, color=txt_color,
+                            fontsize=7, color=txt_color,
                             fontweight='bold',
                             clip_on=True)
 
@@ -1334,9 +1352,9 @@ def plot_opto_images(result, save_path=None):
     n_rows  = math.ceil(n_ids / n_cols)
 
     # Shared symmetric colorscale across all panels
-    vlim = np.nanpercentile(np.abs(opto_delta), 99)
-    if vlim == 0:
-        vlim = 1.0
+    # vlim = np.nanpercentile(np.abs(opto_delta), 99)
+    # if vlim == 0:
+    vlim = 0.5   # default to 50% change if data is flat; adjust as needed for visibility
 
     fig, axes = plt.subplots(n_rows, n_cols,
                               figsize=(5 * n_cols, 4.5 * n_rows),
