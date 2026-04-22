@@ -1,7 +1,6 @@
 {
-    "python.defaultInterpreterPath": "/home/schollab-gaga/miniforge3/envs/pypipeline/bin/python",
+    "python.defaultInterpreterPath": "/home/schollab-gaga/miniforge3/envs/pypipeline312/bin/python",
     "python.terminal.activateEnvironment": true,
-    "python.envFile": "${workspaceFolder}/.env",
-    "python-envs.defaultEnvManager": "ms-python.python:conda",
+"python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda"
 }

@@ -1,0 +1,18 @@
+name: pypipeline312
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - numpy
+  - scipy
+  - matplotlib
+  - scikit-image
+  - scikit-learn
+  - h5py
+  - tifffile
+  - roifile
+  - tqdm
+  - pip
+  - pip:
+    - opencv-python
