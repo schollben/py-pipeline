@@ -10,7 +10,6 @@ FILE_NUM        = 3             # TSeries number (e.g. 3 → matches folder endi
 STIM_FILE       = 2             # PsychoPy file, Set to -1 if there is no stimulus file.
 IS_SPONTANEOUS  = True          # True  → experiment has NO visual stimulus (spontaneous activity only)
 USE_INFERENCE   = True          # True  → use inference_results.h5
-DO_NEUROPIL     = False         # True  → extract and subtract neuropil signal from cell traces.
 DUR_RESP        = 2             # Response window duration in seconds to build the trial-averaged response matrix (cyc)
 
 IS_2P_OPTO      = True          # True  → experiment includes 2-photon photostimulation (optogenetics), Will read MarkPoints XML and compute opto % change images
@@ -33,7 +32,7 @@ if __name__ == '__main__':
         is_spontaneous       = IS_SPONTANEOUS,
         is_2p_opto           = IS_2P_OPTO,
         use_inference        = USE_INFERENCE,
-        do_neuropil          = DO_NEUROPIL,
+        do_neuropil          = False,
         dur_resp             = DUR_RESP,
         opto_post_sec        = OPTO_POST_SEC,
         opto_pre_sec         = OPTO_PRE_SEC,
