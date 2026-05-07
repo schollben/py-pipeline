@@ -14,11 +14,11 @@ from img_utils import *
 import tkinter as tk
 from tkinter import filedialog
 
-# Ask user to select a folder within /mnt/md0/
+# Ask user to select a folder within /mnt/bigdata/
 root = tk.Tk()
 root.withdraw()  # Hide the main tkinter window
 save_location = filedialog.askdirectory(
-    initialdir='/mnt/md0/',
+    initialdir='/mnt/bigdata/',
     title='Select folder for analysis'
 )
 
