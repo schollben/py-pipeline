@@ -1,6 +1,7 @@
 # A module to handle common formats for calcium movies.
 import os
 import sys
+import shutil
 import xml.etree.ElementTree as ET
 import code
 from glob import glob
@@ -180,7 +181,7 @@ def replace_missing_frame_triggers(frame_triggers):
         if (frame_triggers[k] - frame_triggers[k-1]) > (med_period + med_period/4):
             new_frame_triggers.append(frame_triggers[k-1] + med_period)
         new_frame_triggers.append(frame_triggers[k])
-    return np.array([new_frame_triggers])
+    return np.array(new_frame_triggers)
  
 def genfromtxt_with_progress(filename, **kwargs):
     '''
@@ -266,10 +267,8 @@ def gen_stim_cyc(outfile, pre=0, slag=0, dur_resp=2.5):
                     if outfile['do_cascade'][0]:
                         s = outfile['spike_inference'][tt,cc]
                 else:
-                    f = np.empty((76,))
-                    s = np.empty((76,))
-                    f[:] = np.nan
-                    s[:] = np.nan
+                    f = np.full(stim_dur + pre, np.nan)
+                    s = np.full(stim_dur + pre, np.nan)
                 cyc[cc, ind, int(trial_list[ind]), :] = f
                 if outfile['do_cascade'][0]:
                     cyc_spk_inf[cc, ind, int(trial_list[ind]), :] = s
@@ -633,7 +632,7 @@ def std_dev_from_h5(h5_path, start_frame, end_frame, std_width, std_jmps):
 
         while curr_end < termination_val:
             sample = data[curr_strt:curr_end, :, :]
-            std_dev_sample_list.append()
+            std_dev_sample_list.append(np.std(sample, axis=0))
 
         std_dev_sample_array = np.array(std_dev_sample_list)
 
@@ -671,9 +670,9 @@ def deinterleave_movies(parent_dir, scope_format):
         ch_2_fnames = [f for f in fnames if 'Ch2' in f]
         # Not presuming same number for both, but there usually should be.
         for i in range(len(ch_1_fnames)):
-            shutil.move(ch_1_fnames[i], "//".join([parent_dir, 'ch1', f"{i:05d}", ".tif"]))
+            shutil.move(ch_1_fnames[i], os.path.join(parent_dir, 'ch1', f"{i:05d}.tif"))
         for i in range(len(ch_2_fnames)):
-            shutil.move(ch_2_fnames[i], "//".join([parent_dir, 'ch2', f"{i:05d}", ".tif"]))
+            shutil.move(ch_2_fnames[i], os.path.join(parent_dir, 'ch2', f"{i:05d}.tif"))
             
     elif scope_format == "SCANIMAGE":
         # Interleaved frames in the same file. Read, split, write separate channels.
@@ -681,8 +680,8 @@ def deinterleave_movies(parent_dir, scope_format):
             mov = tifffile.imread(fnames[i])
             ch_1 = mov[::2,:,:] # Even frames, including first
             ch_2 = mov[1::2,:,:]# Odd frames
-            tifffile.imwrite('//'.join([parent_dir, 'ch1', f"{i:05d}", "*.tif"]), ch_1)
-            tifffile.imwrite('//'.join([parent_dir, 'ch2', f"{i:05d}", "*.tif"]), ch_2)
+            tifffile.imwrite(os.path.join(parent_dir, 'ch1', f"{i:05d}.tif"), ch_1)
+            tifffile.imwrite(os.path.join(parent_dir, 'ch2', f"{i:05d}.tif"), ch_2)
             
     else:
         assert False, "{} is improper scope format. \

@@ -19,11 +19,11 @@ def compare_reg_inf_ends(dirname, chnk=1000, middle=True):
     I was doing this enough times that I wanted it to be quick functionality.
     '''
     reg_name = os.path.join(dirname, 'registered.h5')
-    inf_name = os.path.join(dirname, 'inference_results.h5')
+    inf_name = os.path.join(dirname, 'inference.h5')
     
     reg = h5py.File(reg_name, 'r')
     key = 'data' if 'data' in reg.keys() else 'mov'
-    num_frames = int(reg['data'].shape[0])
+    num_frames = int(reg[key].shape[0])
     reg.close()
 
     reg_end_savename = os.path.join(dirname, 'samples', f'reg_{num_frames-chnk}_{num_frames}.tif')

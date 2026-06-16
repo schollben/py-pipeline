@@ -1395,8 +1395,8 @@ def plot_opto_images(result, save_path=None):
 
 def plot_vrec_diagnostic(result, save_path=None):
     """
-    Plot the full vrec trace (all channels, all time) with detected trigger
-    events overlaid. Channels are vertically offset so they don't overlap.
+    Plot vrec channels for the first 30 seconds (downsampled to ~1 kHz) with
+    detected trigger events overlaid. Channels are vertically offset.
 
     Parameters
     ----------
@@ -1408,8 +1408,6 @@ def plot_vrec_diagnostic(result, save_path=None):
     vrec           = result.get('vrec')
     vis_ch         = result.get('visual_trigger_ch')
     opto_ch        = result.get('photostim_ch')
-    stim_on        = result.get('stim_on')
-    photostim_trig = result.get('photostim_triggers')
     stim_id_arr    = result.get('stim_id')
     experiment_id  = result.get('experiment_id', '')
 
@@ -1417,10 +1415,37 @@ def plot_vrec_diagnostic(result, save_path=None):
         print('[vrec_diagnostic] No vrec data available — skipping.')
         return
 
+    vrec_sample_rate = result.get('vrec_sample_rate', 10000)
+
+    # --- Window and downsample -----------------------------------------------
+    # Keep original trigger counts for the title, then trim to the display window.
+    stim_on_full        = result.get('stim_on')
+    photostim_trig_full = result.get('photostim_triggers')
+    n_vis_total  = len(stim_on_full)        if stim_on_full        is not None else 0
+    n_opto_total = len(photostim_trig_full) if photostim_trig_full is not None else 0
+
+    n_diag = min(30 * vrec_sample_rate, vrec.shape[0])
+    step   = max(1, vrec_sample_rate // 1000)          # downsample to ~1 kHz
+    vrec   = vrec[:n_diag:step, :]
+
+    def _trim_triggers(trig_arr):
+        if trig_arr is None or len(trig_arr) == 0:
+            return None
+        mask = trig_arr < n_diag
+        return (trig_arr[mask] // step).astype(int)
+
+    stim_on        = _trim_triggers(stim_on_full)
+    photostim_trig = _trim_triggers(photostim_trig_full)
+
+    # Trim stim_id_arr to match the number of photostim triggers in the window
+    stim_id_arr_win = None
+    if stim_id_arr is not None and photostim_trig is not None:
+        stim_id_arr_win = stim_id_arr[:len(photostim_trig)]
+
+    # -------------------------------------------------------------------------
     n_samples, n_cols = vrec.shape
     data_cols = list(range(1, n_cols))   # skip col 0 = Time(ms)
 
-    # Full time axis in seconds
     t_sec = vrec[:, 0] / 1000.0
 
     fig, ax = plt.subplots(1, 1, figsize=(18, 5), constrained_layout=True)
@@ -1434,7 +1459,6 @@ def plot_vrec_diagnostic(result, save_path=None):
 
     channel_names = {c: f'Input {c-1}' for c in data_cols}
 
-    # Vertical offset per channel based on full-trace range
     signals = [vrec[:, col] for col in data_cols]
     ranges  = [np.percentile(s, 99) - np.percentile(s, 1) for s in signals]
     spacing = max(ranges) * 1.4 if max(ranges) > 0 else 1.0
@@ -1452,11 +1476,9 @@ def plot_vrec_diagnostic(result, save_path=None):
 
         ax.plot(t_sec, sig + offset, color=color, linewidth=0.5, alpha=0.85)
 
-        # Channel label at left edge
         ax.text(t_sec[0] - (t_sec[-1] * 0.005), offset, label,
                 ha='right', va='center', fontsize=8, color=color)
 
-        # Visual stim triggers
         if col == vis_ch and stim_on is not None and len(stim_on):
             t_t = t_sec[stim_on]
             y_t = vrec[stim_on, col] + offset
@@ -1464,13 +1486,11 @@ def plot_vrec_diagnostic(result, save_path=None):
                            zorder=5, label='Visual stim onset')
             legend_handles.append(h)
 
-        # Photostim triggers coloured by stim_id
         if col == opto_ch and photostim_trig is not None and len(photostim_trig):
-            if stim_id_arr is not None and len(stim_id_arr) >= len(photostim_trig):
-                ids     = stim_id_arr[:len(photostim_trig)]
-                unique_ids = np.unique(ids)
+            if stim_id_arr_win is not None:
+                unique_ids = np.unique(stim_id_arr_win)
                 for ui, uid in enumerate(unique_ids):
-                    sel = ids == uid
+                    sel = stim_id_arr_win == uid
                     c   = _OPTO_COLORS[ui % len(_OPTO_COLORS)]
                     t_t = t_sec[photostim_trig[sel]]
                     y_t = vrec[photostim_trig[sel], col] + offset
@@ -1492,15 +1512,12 @@ def plot_vrec_diagnostic(result, save_path=None):
     if legend_handles:
         ax.legend(handles=legend_handles, fontsize=8, loc='upper right')
 
-    n_vis  = len(stim_on)        if stim_on        is not None else 0
-    n_opto = len(photostim_trig) if photostim_trig  is not None else 0
-    n_rows = len(stim_id_arr)    if stim_id_arr     is not None else '?'
-    match  = '✓' if isinstance(n_rows, int) and n_opto == n_rows else '✗'
-    dur    = f'{t_sec[-1]:.0f} s' if len(t_sec) else '?'
+    n_rows = len(stim_id_arr) if stim_id_arr is not None else '?'
+    match  = '✓' if isinstance(n_rows, int) and n_opto_total == n_rows else '✗'
     ax.set_title(
-        f'{experiment_id}  |  Vrec diagnostic  |  full trace ({dur})\n'
-        f'Visual triggers: {n_vis}    '
-        f'Photostim triggers: {n_opto}    '
+        f'{experiment_id}  |  Vrec diagnostic  |  first 30 s (downsampled to 1 kHz)\n'
+        f'Visual triggers (total): {n_vis_total}    '
+        f'Photostim triggers (total): {n_opto_total}    '
         f'Stim file rows: {n_rows}    '
         f'Match: {match}',
         fontsize=10
