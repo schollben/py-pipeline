@@ -8,7 +8,6 @@ from bruker_pipeline import process_experiment
 DATE            = '06042026'    # acquisition date, format MMDDYYYY
 FILE_NUM        = 3           # TSeries number (e.g. 3 → matches folder ending in -003)
 STIM_FILE       = -1            # PsychoPy file, Set to -1 if there is no stimulus file.
-IS_SPONTANEOUS  = True          # True  → experiment has NO visual stimulus (spontaneous activity only)
 USE_INFERENCE   = True          # True  → use inference.h5
 DUR_RESP        = 2             # Response window duration in seconds to build the trial-averaged response matrix (cyc)
 
@@ -29,7 +28,6 @@ if __name__ == '__main__':
         date                 = DATE,
         file_num             = FILE_NUM,
         stim_file            = STIM_FILE,
-        is_spontaneous       = IS_SPONTANEOUS,
         is_2p_opto           = IS_2P_OPTO,
         use_inference        = USE_INFERENCE,
         do_neuropil          = False,

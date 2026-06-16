@@ -67,7 +67,6 @@ def process_experiment(
     date,
     file_num,
     stim_file      = -1,
-    is_spontaneous = False,
     is_2p_opto     = False,
     use_inference  = False,
     do_neuropil    = False,
@@ -92,9 +91,9 @@ def process_experiment(
     file_num : int
         TSeries number, e.g. 3 (zero-padded to 003 internally).
     stim_file : int
-        PsychoPy T-file number (e.g. 3 → T003.txt). -1 = no stim file.
-    is_spontaneous : bool
-        True if no visual stimulus triggers (spontaneous activity recording).
+        PsychoPy T-file number (e.g. 3 → T003.txt). -1 = no stim file / spontaneous.
+        When -1, vrec is still loaded and all channel events are detected and saved;
+        only stimulus-aligned response matrices (cyc/resp) are skipped.
     is_2p_opto : bool
         True if dataset contains 2P photostimulation.
     use_inference : bool
@@ -149,7 +148,7 @@ def process_experiment(
         'date':               date,
         'file_num':           file_num,
         'stim_file_num':      stim_file,
-        'is_spontaneous':     is_spontaneous,
+        'is_spontaneous':     stim_file == -1,   # derived: True when no stimulus file
         'is_2p_opto':         is_2p_opto,
         'use_inference':      use_inference,
         'do_neuropil':        do_neuropil,
@@ -208,46 +207,50 @@ def process_experiment(
     # -----------------------------------------------------------------------
     if do_vrec_diagnostic:
         print('\n[do_vrec_diagnostic=True] Loading vrec and detecting triggers only...')
-        vrec = None
-        if files.get('vrec_csv'):
-            vrec = genfromtxt_with_progress(files['vrec_csv'], delimiter=',', skip_header=1)
-            vrec_sample_rate = (vrec_meta['sample_rate'] if vrec_meta else 10000)
-            result['vrec']            = vrec
-            result['vrec_sample_rate']= vrec_sample_rate
-            ch_layout = detect_vrec_channel_layout(vrec)
-            result['vrec_channel_layout'] = ch_layout['layout']
-            result['photostim_ch']        = ch_layout['photostim_ch']
-            # Visual triggers are irrelevant for spontaneous experiments
-            vis_ch = None if is_spontaneous else ch_layout['visual_trigger_ch']
-            result['visual_trigger_ch'] = vis_ch
-            opto_ch = ch_layout['photostim_ch']
 
-            # Visual triggers — rising-edge detection (positive pulses, not spontaneous)
-            if vis_ch is not None:
-                vis_signal = medfilt(vrec[:, vis_ch].astype(float), 51)
-                vis_signal[vis_signal < 0] = 0
-                vis_diff = np.diff(vis_signal)
-                stim_on, _ = find_peaks(vis_diff, distance=1e3,
-                                        height=(max(vis_diff) - max(vis_diff) * 0.9))
+        # Frame triggers for timing reference in the diagnostic plot
+        ft_raw = read_xml_file(files['tseries_xml'])
+        if ft_raw is not None:
+            ft_raw = replace_missing_frame_triggers(ft_raw * 1e4)
+            result['frame_triggers']     = ft_raw
+            result['frame_triggers_sec'] = ft_raw / 1e4
+
+        _require(files['vrec_csv'], f'VoltageRecording CSV not found in {data_dir}')
+        vrec = genfromtxt_with_progress(files['vrec_csv'], delimiter=',', skip_header=1)
+        vrec_sample_rate = vrec_meta['sample_rate'] if vrec_meta else 10000
+        result['vrec']             = vrec
+        result['vrec_sample_rate'] = vrec_sample_rate
+
+        ch_layout = detect_vrec_channel_layout(vrec)
+        vis_ch  = ch_layout['visual_trigger_ch']
+        opto_ch = ch_layout['photostim_ch']
+        result['vrec_channel_layout'] = ch_layout['layout']
+        result['visual_trigger_ch']   = vis_ch
+        result['photostim_ch']        = opto_ch
+
+        vrec_channel_events = _detect_vrec_events(vrec, vrec_sample_rate, vis_ch, opto_ch)
+        result['vrec_channel_events'] = vrec_channel_events
+
+        if vis_ch is not None:
+            stim_on  = vrec_channel_events[vis_ch]['onsets']
+            vis_sig  = medfilt(vrec[:, vis_ch].astype(float), 51)
+            vis_sig[vis_sig < 0] = 0
+            vis_diff = np.diff(vis_sig)
+            if len(vis_diff) and (-vis_diff).max() > 0:
                 stim_off, _ = find_peaks(-vis_diff, distance=1e3,
-                                         height=(max(-vis_diff) - max(-vis_diff) * 0.9))
-                result['stim_on']      = stim_on
-                result['stim_on_sec']  = stim_on / vrec_sample_rate
-                result['stim_off']     = stim_off
-                result['stim_off_sec'] = stim_off / vrec_sample_rate
+                                          height=((-vis_diff).max() - (-vis_diff).max() * 0.9))
+            else:
+                stim_off = np.array([], dtype=int)
+            result['stim_on']      = stim_on
+            result['stim_on_sec']  = stim_on  / vrec_sample_rate
+            result['stim_off']     = stim_off
+            result['stim_off_sec'] = stim_off / vrec_sample_rate
 
-            # Photostim triggers — direct peak detection (positive pulses)
-            if opto_ch is not None:
-                ps_signal = medfilt(vrec[:, opto_ch].astype(float), 51)
-                ps_signal[ps_signal < 0] = 0
-                photostim_triggers, _ = find_peaks(ps_signal, distance=1e4,
-                                                   height=(max(ps_signal) - max(ps_signal) * 0.9))
-                result['photostim_triggers']     = photostim_triggers
-                result['photostim_triggers_sec'] = photostim_triggers / vrec_sample_rate
-        else:
-            print('[WARNING] No vrec CSV found — cannot plot diagnostic.')
+        if opto_ch is not None:
+            result['photostim_triggers']     = vrec_channel_events[opto_ch]['onsets']
+            result['photostim_triggers_sec'] = vrec_channel_events[opto_ch]['onsets_sec']
 
-        # PsychoPy file (for stim_id colouring)
+        # PsychoPy file (for stim_id colouring in diagnostic plot)
         if stim_file > -1:
             psychopy_date = _bruker_date_to_psychopy(experiment_id)
             psychopy_path = os.path.join(PSYCHOPY_ROOT, psychopy_date, f'T{stim_file:03d}.txt')
@@ -506,69 +509,72 @@ def process_experiment(
         result['dff_neuropil'] = dff_neuropil
 
     # -----------------------------------------------------------------------
-    # Step 9-11 — Stimulus processing (skip if is_spontaneous)
+    # Step 9-11 — Stimulus processing
     # -----------------------------------------------------------------------
-    has_stim = (stim_file > -1) and (not is_spontaneous)
 
     # Initialise stimulus keys to None so they always exist in the dict
     for key in ('frame_triggers', 'frame_triggers_sec', 'vrec_sample_rate',
+                'vrec_channel_events',
                 'stim_on', 'stim_on_sec', 'stim_off', 'stim_off_sec',
                 'stim_on_2p_frame', 'stim_id', 'unique_stims',
                 'stim_properties', 'target_number', 'target_trial',
                 'cyc', 'resp', 'resps', 'resp_err', 'stim_avg_images'):
         result[key] = None
 
-    vrec    = None   # needed later for opto
-    opto_ch = None   # set in whichever branch loads the vrec
+    has_stim = stim_file > -1
 
-    if not is_spontaneous:
-        # --- Frame triggers from XML ---
-        print('Reading 2P frame triggers from XML...')
-        frame_triggers = read_xml_file(files['tseries_xml'])
-        frame_triggers = frame_triggers * 1e4   # → 10 kHz samples
-        if frame_triggers[0] > 340:
-            print('[WARNING] First 2P frame trigger appears to be missing — interpolating.')
-        frame_triggers = replace_missing_frame_triggers(frame_triggers)
-        result['frame_triggers']     = frame_triggers
-        result['frame_triggers_sec'] = frame_triggers / 1e4   # convert 10 kHz samples → seconds
+    # --- Frame triggers from XML (always) ---
+    print('Reading 2P frame triggers from XML...')
+    frame_triggers = read_xml_file(files['tseries_xml'])
+    frame_triggers = frame_triggers * 1e4   # → 10 kHz samples
+    if frame_triggers[0] > 340:
+        print('[WARNING] First 2P frame trigger appears to be missing — interpolating.')
+    frame_triggers = replace_missing_frame_triggers(frame_triggers)
+    result['frame_triggers']     = frame_triggers
+    result['frame_triggers_sec'] = frame_triggers / 1e4
 
-        # --- Voltage recording ---
-        _require(files['vrec_csv'],
-                 f'VoltageRecording CSV not found in {data_dir}')
-        print('Loading voltage recording...')
-        vrec = genfromtxt_with_progress(files['vrec_csv'],
-                                        delimiter=',', skip_header=1)
-        vrec_sample_rate = (vrec_meta['sample_rate']
-                            if vrec_meta else 10000)
-        result['vrec_sample_rate'] = vrec_sample_rate
+    # --- Voltage recording (always required) ---
+    _require(files['vrec_csv'], f'VoltageRecording CSV not found in {data_dir}')
+    print('Loading voltage recording...')
+    vrec = genfromtxt_with_progress(files['vrec_csv'], delimiter=',', skip_header=1)
+    vrec_sample_rate = vrec_meta['sample_rate'] if vrec_meta else 10000
+    result['vrec_sample_rate'] = vrec_sample_rate
 
-        # --- Auto-detect channel layout ---
-        ch_layout = detect_vrec_channel_layout(vrec)
-        vis_ch  = ch_layout['visual_trigger_ch']
-        opto_ch = ch_layout['photostim_ch']
+    # --- Auto-detect channel layout ---
+    ch_layout = detect_vrec_channel_layout(vrec)
+    vis_ch  = ch_layout['visual_trigger_ch']
+    opto_ch = ch_layout['photostim_ch']
 
-        if has_stim and vis_ch is not None:
-            # --- Detect visual stimulus onsets from vrec ---
-            # Triggers are positive pulses on Input 1 (col 2). Rising-edge
-            # detection: median-filter → zero negatives → diff → find positive peaks.
-            vis_signal = medfilt(vrec[:, vis_ch].astype(float), 51)
-            vis_signal[vis_signal < 0] = 0
-            vis_diff = np.diff(vis_signal)
+    # --- Detect events on all vrec channels ---
+    vrec_channel_events = _detect_vrec_events(vrec, vrec_sample_rate, vis_ch, opto_ch)
+    result['vrec_channel_events'] = vrec_channel_events
 
-            stim_on, _  = find_peaks(vis_diff, distance=1e3,
-                                     height=(max(vis_diff) - max(vis_diff) * 0.9))
+    if vis_ch is not None:
+        stim_on  = vrec_channel_events[vis_ch]['onsets']
+        vis_sig  = medfilt(vrec[:, vis_ch].astype(float), 51)
+        vis_sig[vis_sig < 0] = 0
+        vis_diff = np.diff(vis_sig)
+        if len(vis_diff) and (-vis_diff).max() > 0:
             stim_off, _ = find_peaks(-vis_diff, distance=1e3,
-                                     height=(max(-vis_diff) - max(-vis_diff) * 0.9))
+                                      height=((-vis_diff).max() - (-vis_diff).max() * 0.9))
+        else:
+            stim_off = np.array([], dtype=int)
+        result['stim_on']      = stim_on
+        result['stim_on_sec']  = stim_on  / vrec_sample_rate
+        result['stim_off']     = stim_off
+        result['stim_off_sec'] = stim_off / vrec_sample_rate
 
-            stim_on_sec  = stim_on  / vrec_sample_rate
-            stim_off_sec = stim_off / vrec_sample_rate
+        stim_on_2p_frame = np.array([
+            np.argmin(np.abs(s - frame_triggers))
+            for s in stim_on
+        ], dtype=float)
+        result['stim_on_2p_frame'] = stim_on_2p_frame
 
-            result['stim_on']      = stim_on
-            result['stim_on_sec']  = stim_on_sec
-            result['stim_off']     = stim_off
-            result['stim_off_sec'] = stim_off_sec
+    if opto_ch is not None:
+        result['photostim_triggers']     = vrec_channel_events[opto_ch]['onsets']
+        result['photostim_triggers_sec'] = vrec_channel_events[opto_ch]['onsets_sec']
 
-    # --- Read PsychoPy file whenever stim_file > -1, regardless of is_spontaneous ---
+    # --- Read PsychoPy file whenever stim_file > -1 ---
     if stim_file > -1:
         psychopy_date = _bruker_date_to_psychopy(experiment_id)
         psychopy_path = os.path.join(
@@ -609,20 +615,13 @@ def process_experiment(
             print(f'  {len(stim_id)} rows loaded, '
                   f'{len(np.unique(stim_id))} unique stim IDs: {np.unique(stim_id).tolist()}')
 
-            # For non-spontaneous experiments: validate trigger count and map to frames
-            if not is_spontaneous and result.get('stim_on') is not None:
+            if result.get('stim_on') is not None:
                 stim_on = result['stim_on']
                 if len(stim_on) != len(stim_id):
                     print(f'[WARNING] Stim trigger mismatch: '
                           f'{len(stim_on)} detected vs {len(stim_id)} in stim file!')
                 else:
                     print(f'Stim triggers: {len(stim_on)} ✓')
-
-                stim_on_2p_frame = np.array([
-                    np.argmin(np.abs(s - frame_triggers))
-                    for s in stim_on
-                ], dtype=float)
-                result['stim_on_2p_frame'] = stim_on_2p_frame
 
     # -----------------------------------------------------------------------
     # Step 11 — Response analysis (stimulus present, not spontaneous)
@@ -685,29 +684,11 @@ def process_experiment(
         outfile.close()
 
     # -----------------------------------------------------------------------
-    # Step 11b — Load vrec for spontaneous + opto experiments
-    #             (when is_spontaneous=True the vrec block above was skipped,
-    #              but we still need the voltage recording to find photostim
-    #              triggers.  Load it here if not already loaded.)
-    # -----------------------------------------------------------------------
-    if is_2p_opto and vrec is None and files.get('vrec_csv'):
-        print('Loading voltage recording for opto trigger detection '
-              '(spontaneous experiment)...')
-        vrec = genfromtxt_with_progress(files['vrec_csv'],
-                                        delimiter=',', skip_header=1)
-        vrec_sample_rate = (vrec_meta['sample_rate'] if vrec_meta else 10000)
-        result['vrec_sample_rate'] = vrec_sample_rate
-
-        ch_layout = detect_vrec_channel_layout(vrec)
-        opto_ch = ch_layout['photostim_ch']
-
-    # -----------------------------------------------------------------------
     # Step 12 — 2P opto processing
     # -----------------------------------------------------------------------
     # Initialise opto keys to None (markpoints_* keys are initialised in Step 3b
     # and must NOT be reset here — they are populated regardless of vrec)
-    for key in ('photostim_triggers', 'photostim_triggers_sec',
-                'photostim_2p_frame',
+    for key in ('photostim_2p_frame',
                 'opto_stim_ids', 'opto_avg_images', 'opto_baseline_image',
                 'opto_delta_images', 'opto_trial_delta_images', 'opto_n_trials',
                 'opto_grand_avg_image', 'opto_grand_baseline_image',
@@ -718,33 +699,11 @@ def process_experiment(
                 'cyc_photostim_only'):
         result[key] = None
 
-    if is_2p_opto and vrec is not None and opto_ch is not None:
-        vrec_sample_rate = result['vrec_sample_rate'] or 10000
-
-        # Detect photostim triggers — direct peak detection on positive pulses
-        print('Detecting photostimulation triggers...')
-        ps_signal = medfilt(vrec[:, opto_ch].astype(float), 51)
-        ps_signal[ps_signal < 0] = 0
-        photostim_triggers, _ = find_peaks(
-            ps_signal, distance=1e4,
-            height=(max(ps_signal) - max(ps_signal) * 0.9))
-
-        photostim_triggers_sec = photostim_triggers / vrec_sample_rate
-        result['photostim_triggers']     = photostim_triggers
-        result['photostim_triggers_sec'] = photostim_triggers_sec
-
-        # Map photostim triggers to 2P frames using frame_triggers
-        ft = result.get('frame_triggers')
-        if ft is None:
-            # If spontaneous (no frame triggers from stim branch), read them now
-            print('Reading frame triggers for 2P opto sync...')
-            ft = read_xml_file(files['tseries_xml']) * 1e4
-            ft = replace_missing_frame_triggers(ft)
-            result['frame_triggers']     = ft
-            result['frame_triggers_sec'] = ft / 1e4   # convert 10 kHz samples → seconds
+    if is_2p_opto and opto_ch is not None:
+        photostim_triggers = result['photostim_triggers']
 
         photostim_2p_frame = np.array([
-            np.argmin(np.abs(ps - ft))
+            np.argmin(np.abs(ps - frame_triggers))
             for ps in photostim_triggers
         ], dtype=int)
         result['photostim_2p_frame'] = photostim_2p_frame
@@ -964,6 +923,44 @@ def process_experiment(
 # ===========================================================================
 # Voltage channel auto-detection
 # ===========================================================================
+
+def _detect_vrec_events(vrec, vrec_sample_rate, vis_ch, opto_ch):
+    """
+    Detect onset events on every non-time vrec column.
+
+    Returns a dict keyed by column index (1-based, matching vrec columns):
+        {col: {'onsets': np.ndarray[int], 'onsets_sec': np.ndarray[float]}}
+
+    Detection strategy:
+      - vis_ch  : rising-edge (diff peak) on median-filtered signal
+      - opto_ch : direct peak on median-filtered signal (positive pulses)
+      - other   : peak detection with a 50% amplitude threshold
+    """
+    n_cols = vrec.shape[1]
+    events = {}
+    for col in range(1, n_cols):
+        sig = medfilt(vrec[:, col].astype(float), 51)
+        sig[sig < 0] = 0
+        if sig.max() == 0:
+            events[col] = {'onsets': np.array([], dtype=int),
+                           'onsets_sec': np.array([], dtype=float)}
+            continue
+        if col == vis_ch:
+            sig_diff = np.diff(sig)
+            if sig_diff.max() > 0:
+                onsets, _ = find_peaks(sig_diff, distance=1e3,
+                                       height=(sig_diff.max() - sig_diff.max() * 0.9))
+            else:
+                onsets = np.array([], dtype=int)
+        elif col == opto_ch:
+            onsets, _ = find_peaks(sig, distance=1e4,
+                                   height=(sig.max() - sig.max() * 0.9))
+        else:
+            onsets, _ = find_peaks(sig, distance=500, height=sig.max() * 0.5)
+        events[col] = {'onsets': onsets,
+                       'onsets_sec': onsets / vrec_sample_rate}
+    return events
+
 
 def detect_vrec_channel_layout(vrec, threshold=1.0):
     """
