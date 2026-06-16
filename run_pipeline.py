@@ -38,7 +38,7 @@ if __name__ == '__main__':
         opto_pre_sec         = OPTO_PRE_SEC,
         opto_blank_sec       = OPTO_DUR,
         do_plot              = DO_PLOT,
-        do_vrec_diagnostic   = False,
+        do_vrec_diagnostic   = True,
         opto_offset_trigger  = OPTO_OFFSET,
     )
     

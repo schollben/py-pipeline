@@ -1395,8 +1395,15 @@ def plot_opto_images(result, save_path=None):
 
 def plot_vrec_diagnostic(result, save_path=None):
     """
-    Plot vrec channels for the first 30 seconds (downsampled to ~1 kHz) with
-    detected trigger events overlaid. Channels are vertically offset.
+    Plot vrec channels for the first 30 seconds (downsampled to ~1 kHz).
+
+    Every channel shows:
+      - Raw voltage trace
+      - 2P frame trigger tick marks (gray '|') wherever a frame was acquired
+
+    Additionally, channel-specific event overlays:
+      - Visual-stim channel (vis_ch): downward triangles at stim onsets
+      - Photostim channel (opto_ch): upward triangles coloured by stim_id
 
     Parameters
     ----------
@@ -1405,11 +1412,12 @@ def plot_vrec_diagnostic(result, save_path=None):
     save_path : str or None
         If given, save the figure to this path.
     """
-    vrec           = result.get('vrec')
-    vis_ch         = result.get('visual_trigger_ch')
-    opto_ch        = result.get('photostim_ch')
-    stim_id_arr    = result.get('stim_id')
-    experiment_id  = result.get('experiment_id', '')
+    vrec             = result.get('vrec')
+    vis_ch           = result.get('visual_trigger_ch')
+    opto_ch          = result.get('photostim_ch')
+    stim_id_arr      = result.get('stim_id')
+    frame_triggers   = result.get('frame_triggers')   # may be None in early-exit mode
+    experiment_id    = result.get('experiment_id', '')
 
     if vrec is None:
         print('[vrec_diagnostic] No vrec data available — skipping.')
@@ -1418,26 +1426,31 @@ def plot_vrec_diagnostic(result, save_path=None):
     vrec_sample_rate = result.get('vrec_sample_rate', 10000)
 
     # --- Window and downsample -----------------------------------------------
-    # Keep original trigger counts for the title, then trim to the display window.
+    # Save full-recording counts before trimming (used in title).
     stim_on_full        = result.get('stim_on')
     photostim_trig_full = result.get('photostim_triggers')
     n_vis_total  = len(stim_on_full)        if stim_on_full        is not None else 0
     n_opto_total = len(photostim_trig_full) if photostim_trig_full is not None else 0
 
     n_diag = min(30 * vrec_sample_rate, vrec.shape[0])
-    step   = max(1, vrec_sample_rate // 1000)          # downsample to ~1 kHz
+    step   = max(1, vrec_sample_rate // 1000)   # downsample to ~1 kHz
     vrec   = vrec[:n_diag:step, :]
 
     def _trim_triggers(trig_arr):
+        """Map full-rate sample indices into the downsampled display space."""
         if trig_arr is None or len(trig_arr) == 0:
             return None
-        mask = trig_arr < n_diag
-        return (trig_arr[mask] // step).astype(int)
+        # frame_triggers may be 2-D (1, N) from replace_missing_frame_triggers;
+        # flatten defensively before comparison.
+        arr  = np.asarray(trig_arr).ravel()
+        mask = arr < n_diag
+        return (arr[mask] // step).astype(int)
 
-    stim_on        = _trim_triggers(stim_on_full)
-    photostim_trig = _trim_triggers(photostim_trig_full)
+    stim_on         = _trim_triggers(stim_on_full)
+    photostim_trig  = _trim_triggers(photostim_trig_full)
+    frame_trig_disp = _trim_triggers(frame_triggers)
 
-    # Trim stim_id_arr to match the number of photostim triggers in the window
+    # Trim stim_id_arr to the number of photostim triggers visible in the window
     stim_id_arr_win = None
     if stim_id_arr is not None and photostim_trig is not None:
         stim_id_arr_win = stim_id_arr[:len(photostim_trig)]
@@ -1450,8 +1463,9 @@ def plot_vrec_diagnostic(result, save_path=None):
 
     fig, ax = plt.subplots(1, 1, figsize=(18, 5), constrained_layout=True)
 
-    _VIS_COLOR   = '#1E90FF'
-    _OPTO_COLORS = [
+    _VIS_COLOR    = '#1E90FF'
+    _FRAME_COLOR  = '#22CC44'
+    _OPTO_COLORS  = [
         '#FF0000', '#FF7700', '#FFD700', '#00FF00', '#00FFFF',
         '#0077FF', '#AA00FF', '#FF00AA', '#FF77FF', '#00FF88',
     ]
@@ -1465,6 +1479,7 @@ def plot_vrec_diagnostic(result, save_path=None):
     offsets = {col: i * spacing for i, col in enumerate(data_cols)}
 
     legend_handles = []
+    frame_legend_added = False
 
     for i, col in enumerate(data_cols):
         sig    = signals[i]
@@ -1479,6 +1494,18 @@ def plot_vrec_diagnostic(result, save_path=None):
         ax.text(t_sec[0] - (t_sec[-1] * 0.005), offset, label,
                 ha='right', va='center', fontsize=8, color=color)
 
+        # 2P frame triggers — shown on every channel as green tick marks
+        if frame_trig_disp is not None and len(frame_trig_disp):
+            y_ft = vrec[frame_trig_disp, col] + offset
+            lbl  = '2P frame' if not frame_legend_added else '_nolegend_'
+            h = ax.scatter(t_sec[frame_trig_disp], y_ft,
+                           marker='|', s=30, linewidths=0.8,
+                           color=_FRAME_COLOR, alpha=0.5, zorder=4, label=lbl)
+            if not frame_legend_added:
+                legend_handles.append(h)
+                frame_legend_added = True
+
+        # Visual-stim channel: stim onset markers (downward triangles)
         if col == vis_ch and stim_on is not None and len(stim_on):
             t_t = t_sec[stim_on]
             y_t = vrec[stim_on, col] + offset
@@ -1486,6 +1513,7 @@ def plot_vrec_diagnostic(result, save_path=None):
                            zorder=5, label='Visual stim onset')
             legend_handles.append(h)
 
+        # Photostim channel: trigger markers coloured by stim_id
         if col == opto_ch and photostim_trig is not None and len(photostim_trig):
             if stim_id_arr_win is not None:
                 unique_ids = np.unique(stim_id_arr_win)
@@ -1512,10 +1540,12 @@ def plot_vrec_diagnostic(result, save_path=None):
     if legend_handles:
         ax.legend(handles=legend_handles, fontsize=8, loc='upper right')
 
-    n_rows = len(stim_id_arr) if stim_id_arr is not None else '?'
-    match  = '✓' if isinstance(n_rows, int) and n_opto_total == n_rows else '✗'
+    n_rows  = len(stim_id_arr) if stim_id_arr is not None else '?'
+    n_frames = len(np.asarray(frame_triggers).ravel()) if frame_triggers is not None else 'N/A'
+    match   = '✓' if isinstance(n_rows, int) and n_opto_total == n_rows else '✗'
     ax.set_title(
         f'{experiment_id}  |  Vrec diagnostic  |  first 30 s (downsampled to 1 kHz)\n'
+        f'2P frames: {n_frames}    '
         f'Visual triggers (total): {n_vis_total}    '
         f'Photostim triggers (total): {n_opto_total}    '
         f'Stim file rows: {n_rows}    '
