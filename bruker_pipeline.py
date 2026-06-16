@@ -511,7 +511,7 @@ def process_experiment(
     has_stim = (stim_file > -1) and (not is_spontaneous)
 
     # Initialise stimulus keys to None so they always exist in the dict
-    for key in ('frame_triggers', 'vrec_sample_rate',
+    for key in ('frame_triggers', 'frame_triggers_sec', 'vrec_sample_rate',
                 'stim_on', 'stim_on_sec', 'stim_off', 'stim_off_sec',
                 'stim_on_2p_frame', 'stim_id', 'unique_stims',
                 'stim_properties', 'target_number', 'target_trial',
@@ -529,7 +529,8 @@ def process_experiment(
         if frame_triggers[0] > 340:
             print('[WARNING] First 2P frame trigger appears to be missing — interpolating.')
         frame_triggers = replace_missing_frame_triggers(frame_triggers)
-        result['frame_triggers'] = frame_triggers
+        result['frame_triggers']     = frame_triggers
+        result['frame_triggers_sec'] = frame_triggers / 1e4   # convert 10 kHz samples → seconds
 
         # --- Voltage recording ---
         _require(files['vrec_csv'],
@@ -739,7 +740,8 @@ def process_experiment(
             print('Reading frame triggers for 2P opto sync...')
             ft = read_xml_file(files['tseries_xml']) * 1e4
             ft = replace_missing_frame_triggers(ft)
-            result['frame_triggers'] = ft
+            result['frame_triggers']     = ft
+            result['frame_triggers_sec'] = ft / 1e4   # convert 10 kHz samples → seconds
 
         photostim_2p_frame = np.array([
             np.argmin(np.abs(ps - ft))
