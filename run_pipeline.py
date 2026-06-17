@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from bruker_pipeline import process_experiment
 
 ######## Set parameters for the experiment to process ########
-DATE            = '06042026'    # acquisition date, format MMDDYYYY
+DATE            = '05062026'#'06042026'    # acquisition date, format MMDDYYYY
 FILE_NUM        = 3           # TSeries number (e.g. 3 → matches folder ending in -003)
 STIM_FILE       = -1            # PsychoPy file, Set to -1 if there is no stimulus file.
 USE_INFERENCE   = True          # True  → use inference.h5

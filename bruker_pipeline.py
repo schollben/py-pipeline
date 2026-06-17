@@ -21,7 +21,7 @@ import numpy as np
 import h5py
 import tifffile
 import roifile
-from scipy.signal import medfilt, find_peaks
+from scipy.signal import medfilt, find_peaks, decimate
 from tqdm import tqdm
 
 import matplotlib
@@ -232,19 +232,18 @@ def process_experiment(
         result['vrec_channel_events'] = vrec_channel_events
 
         if vis_ch is not None:
-            stim_on  = vrec_channel_events[vis_ch]['onsets']
-            vis_sig  = medfilt(vrec[:, vis_ch].astype(float), 51)
+            stim_on_sec = vrec_channel_events[vis_ch]['onsets_sec']
+            vis_sig  = decimate(vrec[:, vis_ch].astype(float), 10, zero_phase=True)
             vis_sig[vis_sig < 0] = 0
             vis_diff = np.diff(vis_sig)
             if len(vis_diff) and (-vis_diff).max() > 0:
-                stim_off, _ = find_peaks(-vis_diff, distance=1e3,
-                                          height=((-vis_diff).max() - (-vis_diff).max() * 0.9))
+                stim_off_ds, _ = find_peaks(-vis_diff, distance=500,
+                                            height=(-vis_diff).max() * 0.1)
+                stim_off_sec = stim_off_ds / (vrec_sample_rate / 10)
             else:
-                stim_off = np.array([], dtype=int)
-            result['stim_on']      = stim_on
-            result['stim_on_sec']  = stim_on  / vrec_sample_rate
-            result['stim_off']     = stim_off
-            result['stim_off_sec'] = stim_off / vrec_sample_rate
+                stim_off_sec = np.array([], dtype=float)
+            result['stim_on_sec']  = stim_on_sec
+            result['stim_off_sec'] = stim_off_sec
 
         if opto_ch is not None:
             result['photostim_triggers']     = vrec_channel_events[opto_ch]['onsets']
@@ -561,10 +560,11 @@ def process_experiment(
     result['vrec_channel_events'] = vrec_channel_events
 
     if vis_ch is not None:
-        stim_on = vrec_channel_events[vis_ch]['onsets']
+        stim_on_sec = vrec_channel_events[vis_ch]['onsets_sec']
+        frame_triggers_sec = result['frame_triggers_sec']
         stim_on_2p_frame = np.array([
-            np.argmin(np.abs(s - frame_triggers))
-            for s in stim_on
+            np.argmin(np.abs(s - frame_triggers_sec))
+            for s in stim_on_sec
         ], dtype=int)
         result['stim_on_2p_frame'] = stim_on_2p_frame
 
@@ -689,11 +689,12 @@ def process_experiment(
         result[key] = None
 
     if is_2p_opto and opto_ch is not None and opto_blank_sec is not None:
-        photostim_triggers = vrec_channel_events[opto_ch]['onsets']
+        photostim_triggers     = vrec_channel_events[opto_ch]['onsets']
+        photostim_triggers_sec = vrec_channel_events[opto_ch]['onsets_sec']
 
         photostim_2p_frame = np.array([
-            np.argmin(np.abs(ps - frame_triggers))
-            for ps in photostim_triggers
+            np.argmin(np.abs(ps - result['frame_triggers_sec']))
+            for ps in photostim_triggers_sec
         ], dtype=int)
         result['photostim_2p_frame'] = photostim_2p_frame
 
@@ -827,15 +828,16 @@ def _detect_vrec_events(vrec, vrec_sample_rate, vis_ch, opto_ch):
     Returns a dict keyed by column index (1-based, matching vrec columns):
         {col: {'onsets': np.ndarray[int], 'onsets_sec': np.ndarray[float]}}
 
-    Detection strategy:
-      - vis_ch  : rising-edge (diff peak) on median-filtered signal
-      - opto_ch : direct peak on median-filtered signal (positive pulses)
-      - other   : peak detection with a 50% amplitude threshold
+    vrec is downsampled by 10 before detection (10 kHz → 1 kHz).
+    'onsets' are indices into the downsampled signal; 'onsets_sec' are in seconds.
+    Rising-edge (diff peak) detection is used on all channels.
     """
-    n_cols = vrec.shape[1]
-    events = {}
+    downsample = 10
+    ds_rate    = vrec_sample_rate / downsample
+    n_cols     = vrec.shape[1]
+    events     = {}
     for col in range(1, n_cols):
-        sig = medfilt(vrec[:, col].astype(float), 101)
+        sig = decimate(vrec[:, col].astype(float), downsample, zero_phase=True)
         sig[sig < 0] = 0
         if sig.max() == 0:
             events[col] = {'onsets': np.array([], dtype=int),
@@ -844,17 +846,14 @@ def _detect_vrec_events(vrec, vrec_sample_rate, vis_ch, opto_ch):
         sig_diff = np.diff(sig)
         if sig_diff.max() <= 0:
             onsets = np.array([], dtype=int)
-        elif col == vis_ch:
-            onsets, _ = find_peaks(sig_diff, distance=5000,
-                                   height=(sig_diff.max() * 0.1))
-        elif col == opto_ch:
-            onsets, _ = find_peaks(sig_diff, distance=5000,
+        elif col == vis_ch or col == opto_ch:
+            onsets, _ = find_peaks(sig_diff, distance=500,
                                    height=(sig_diff.max() * 0.1))
         else:
-            onsets, _ = find_peaks(sig_diff, distance=5000,
+            onsets, _ = find_peaks(sig_diff, distance=500,
                                    height=(sig_diff.max() * 0.5))
         events[col] = {'onsets': onsets,
-                       'onsets_sec': onsets / vrec_sample_rate}
+                       'onsets_sec': onsets / ds_rate}
     return events
 
 
@@ -885,14 +884,14 @@ def detect_vrec_channel_layout(vrec, threshold=1.0):
     names  = {c: f'Input{c - 1}' for c in range(1, n_cols)}
 
     def _n_events(col_idx):
-        """Count positive-going events on a channel."""
-        sig = medfilt(vrec[:, col_idx].astype(float), 101)
+        """Count positive-going rising-edge events on a channel (downsampled 10×)."""
+        sig = decimate(vrec[:, col_idx].astype(float), 10, zero_phase=True)
         sig[sig < 0] = 0
         sig_diff = np.diff(sig)
         if sig_diff.max() <= 0:
             return 0
-        events, _ = find_peaks(sig_diff, distance=5000, height=sig_diff.max() * 0.1)
-        return len(events)
+        evts, _ = find_peaks(sig_diff, distance=500, height=sig_diff.max() * 0.1)
+        return len(evts)
 
     # Count events on all data channels for diagnostic printout
     event_counts = {c: _n_events(c) for c in range(1, n_cols)}
