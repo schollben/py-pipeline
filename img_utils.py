@@ -485,8 +485,6 @@ def get_target_folders_v2(loc, date, fnames, filetype='TSeries'):
         date_str = '-'.join([date[4:], date[:2], date[2:4]])
         folder_list = sorted(glob(loc + filetype + '_' + date_str + '*'))
     
-    assert len(folder_list) > 0, 'No target folders matched given specification.'
-
     if isinstance(fnames, int):
         suffixes = ["{:03d}".format(fnames)]
     else:

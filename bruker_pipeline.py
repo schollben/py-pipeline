@@ -547,6 +547,8 @@ def process_experiment(
     ch_layout = detect_vrec_channel_layout(vrec)
     vis_ch  = ch_layout['visual_trigger_ch']
     opto_ch = ch_layout['photostim_ch']
+    result['visual_trigger_ch'] = vis_ch
+    result['photostim_ch']      = opto_ch
 
     # --- Detect events on all vrec channels ---
     vrec_channel_events = _detect_vrec_events(vrec, vrec_sample_rate, vis_ch, opto_ch)
@@ -557,7 +559,7 @@ def process_experiment(
         stim_on_2p_frame = np.array([
             np.argmin(np.abs(s - frame_triggers))
             for s in stim_on
-        ], dtype=float)
+        ], dtype=int)
         result['stim_on_2p_frame'] = stim_on_2p_frame
 
     if opto_ch is not None:
@@ -797,13 +799,7 @@ def process_experiment(
         if result.get('params', {}).get('is_2p_opto') and result.get('opto_delta_images') is not None:
             fig2_path = os.path.join(output_dir, f'{experiment_id}_opto_images.png')
             plot_opto_images(result, save_path=fig2_path)
-
-    if do_vrec_diagnostic:
-        fig3_path = os.path.join(output_dir, f'{experiment_id}_vrec_diagnostic.png')
-        plot_vrec_diagnostic(result, save_path=fig3_path)
-
-    if do_plot or do_vrec_diagnostic:
-        plt.show()   # display all figures simultaneously
+        plt.show()
 
     # -----------------------------------------------------------------------
     # Step 15 — Print summary
@@ -896,12 +892,8 @@ def detect_vrec_channel_layout(vrec, threshold=1.0):
     # Visual stim is always Input 1 (col 2)
     vis_ch = 2 if n_cols > 2 else None
 
-    # Photostim: first active channel at col 3+ (Input 2+)
-    opto_ch = None
-    for c in range(3, n_cols):
-        if event_counts.get(c, 0) >= 3:
-            opto_ch = c
-            break
+    # Photostim: hardcoded to Input 2 (col 3)
+    opto_ch = 3 if n_cols > 3 else None
 
     if vis_ch is not None and opto_ch is not None:
         layout = 'standard'
@@ -1176,19 +1168,20 @@ def plot_experiment_summary(result, save_path=None):
     # ------------------------------------------------------------------
     if dff is not None and dff.size > 0:
         n_frames, n_cells = dff.shape
-        t_axis   = np.arange(n_frames) * fp          # seconds
+        n_plot_frames = min(n_frames, 12000)
+        t_axis   = np.arange(n_plot_frames) * fp
         n_plot   = min(10, n_cells)
 
         # Vertical spacing: use 2× the 99th-percentile absolute dF/F value
         # so traces don't overlap under typical signal amplitudes.
-        spacing = 2.0 * np.nanpercentile(np.abs(dff[:, :n_plot]), 99)
+        spacing = 2.0 * np.nanpercentile(np.abs(dff[:n_plot_frames, :n_plot]), 99)
         spacing = max(spacing, 0.05)                  # floor so flat traces still separate
 
         # Collect handles for a compact legend
         trace_handles = []
         for cc in range(n_plot):
             offset = cc * spacing
-            line,  = ax_dff.plot(t_axis, dff[:, cc] + offset,
+            line,  = ax_dff.plot(t_axis, dff[:n_plot_frames, cc] + offset,
                                  linewidth=0.6, color='black', alpha=0.75)
             ax_dff.text(t_axis[-1], offset,
                         f' {cc}', va='center', fontsize=6, color='black')
@@ -1221,7 +1214,7 @@ def plot_experiment_summary(result, save_path=None):
         ax_dff.set_xlabel('Time (s)')
         ax_dff.set_ylabel('dF/F  (offset per cell)')
         ax_dff.set_title(f'dF/F traces — first {n_plot} cells')
-        ax_dff.set_xlim(t_axis[0], t_axis[-1])
+        ax_dff.set_xlim(t_axis[0], t_axis[-1])   # t_axis already capped at 12,000 frames
         ax_dff.set_yticks([])          # offsets have no absolute meaning
         if trace_handles:
             ax_dff.legend(handles=trace_handles, loc='upper right',
