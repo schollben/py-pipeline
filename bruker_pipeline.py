@@ -787,6 +787,12 @@ def process_experiment(
     # -----------------------------------------------------------------------
     save_result_h5(result, output_dir)
 
+    # Save opto delta images as a float32 TIFF stack (one slice per group)
+    if result.get('opto_delta_images') is not None:
+        tiff_path = os.path.join(output_dir, f'{experiment_id}_opto_delta_images.tif')
+        tifffile.imwrite(tiff_path, result['opto_delta_images'].astype(np.float32))
+        print(f'Opto delta images saved: {tiff_path}')
+
     # -----------------------------------------------------------------------
     # Step 14 — Visualization
     # -----------------------------------------------------------------------
@@ -1170,7 +1176,7 @@ def plot_experiment_summary(result, save_path=None):
         n_frames, n_cells = dff.shape
         n_plot_frames = min(n_frames, 12000)
         t_axis   = np.arange(n_plot_frames) * fp
-        n_plot   = min(10, n_cells)
+        n_plot   = min(30, n_cells)
 
         # Vertical spacing: use 2× the 99th-percentile absolute dF/F value
         # so traces don't overlap under typical signal amplitudes.
