@@ -13,7 +13,7 @@ DUR_RESP        = 1             # Response window duration in seconds to build t
 
 IS_2P_OPTO      = True          # True  → experiment includes 2-photon photostimulation (optogenetics), Will read MarkPoints XML and compute opto % change images
 OPTO_POST_SEC   = 0.2           # seconds after the blanking window to average (response)
-OPTO_PRE_SEC    = 0.5           # seconds before trigger onset to average (baseline)
+OPTO_PRE_SEC    = 0.25           # seconds before trigger onset to average (baseline)
 
 DO_PLOT         = True          # True → generate and save a summary figure (ROIs, MarkPoints, opto images).
 
@@ -34,7 +34,7 @@ if __name__ == '__main__':
         opto_post_sec        = OPTO_POST_SEC,
         opto_pre_sec         = OPTO_PRE_SEC,
         do_plot              = DO_PLOT,
-        do_vrec_diagnostic   = True,
+        do_vrec_diagnostic   = False,
         opto_offset_trigger  = OPTO_OFFSET,
     )
     

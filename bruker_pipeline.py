@@ -835,24 +835,24 @@ def _detect_vrec_events(vrec, vrec_sample_rate, vis_ch, opto_ch):
     n_cols = vrec.shape[1]
     events = {}
     for col in range(1, n_cols):
-        sig = medfilt(vrec[:, col].astype(float), 51)
+        sig = medfilt(vrec[:, col].astype(float), 101)
         sig[sig < 0] = 0
         if sig.max() == 0:
             events[col] = {'onsets': np.array([], dtype=int),
                            'onsets_sec': np.array([], dtype=float)}
             continue
-        if col == vis_ch:
-            sig_diff = np.diff(sig)
-            if sig_diff.max() > 0:
-                onsets, _ = find_peaks(sig_diff, distance=1e3,
-                                       height=(sig_diff.max() - sig_diff.max() * 0.9))
-            else:
-                onsets = np.array([], dtype=int)
+        sig_diff = np.diff(sig)
+        if sig_diff.max() <= 0:
+            onsets = np.array([], dtype=int)
+        elif col == vis_ch:
+            onsets, _ = find_peaks(sig_diff, distance=5000,
+                                   height=(sig_diff.max() * 0.1))
         elif col == opto_ch:
-            onsets, _ = find_peaks(sig, distance=1e4,
-                                   height=(sig.max() - sig.max() * 0.9))
+            onsets, _ = find_peaks(sig_diff, distance=5000,
+                                   height=(sig_diff.max() * 0.1))
         else:
-            onsets, _ = find_peaks(sig, distance=500, height=sig.max() * 0.5)
+            onsets, _ = find_peaks(sig_diff, distance=5000,
+                                   height=(sig_diff.max() * 0.5))
         events[col] = {'onsets': onsets,
                        'onsets_sec': onsets / vrec_sample_rate}
     return events
@@ -886,9 +886,12 @@ def detect_vrec_channel_layout(vrec, threshold=1.0):
 
     def _n_events(col_idx):
         """Count positive-going events on a channel."""
-        sig = medfilt(vrec[:, col_idx].astype(float), 51)
+        sig = medfilt(vrec[:, col_idx].astype(float), 101)
         sig[sig < 0] = 0
-        events, _ = find_peaks(sig, distance=500, height=threshold * 0.5)
+        sig_diff = np.diff(sig)
+        if sig_diff.max() <= 0:
+            return 0
+        events, _ = find_peaks(sig_diff, distance=5000, height=sig_diff.max() * 0.1)
         return len(events)
 
     # Count events on all data channels for diagnostic printout
