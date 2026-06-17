@@ -9,12 +9,11 @@ DATE            = '06042026'    # acquisition date, format MMDDYYYY
 FILE_NUM        = 3           # TSeries number (e.g. 3 → matches folder ending in -003)
 STIM_FILE       = -1            # PsychoPy file, Set to -1 if there is no stimulus file.
 USE_INFERENCE   = True          # True  → use inference.h5
-DUR_RESP        = 2             # Response window duration in seconds to build the trial-averaged response matrix (cyc)
+DUR_RESP        = 1             # Response window duration in seconds to build the trial-averaged response matrix (cyc)
 
 IS_2P_OPTO      = True          # True  → experiment includes 2-photon photostimulation (optogenetics), Will read MarkPoints XML and compute opto % change images
 OPTO_POST_SEC   = 0.2           # seconds after the blanking window to average (response)
 OPTO_PRE_SEC    = 0.5           # seconds before trigger onset to average (baseline)
-OPTO_DUR        = 0.4           # how long is opto (when shutter CLOSED)
 
 DO_PLOT         = True          # True → generate and save a summary figure (ROIs, MarkPoints, opto images).
 
@@ -34,7 +33,6 @@ if __name__ == '__main__':
         dur_resp             = DUR_RESP,
         opto_post_sec        = OPTO_POST_SEC,
         opto_pre_sec         = OPTO_PRE_SEC,
-        opto_blank_sec       = OPTO_DUR,
         do_plot              = DO_PLOT,
         do_vrec_diagnostic   = True,
         opto_offset_trigger  = OPTO_OFFSET,

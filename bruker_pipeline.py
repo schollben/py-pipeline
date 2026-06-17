@@ -73,7 +73,6 @@ def process_experiment(
     dur_resp       = 2.5,
     opto_post_sec  = 1.0,
     opto_pre_sec   = 0.5,
-    opto_blank_sec = 0.4,
     do_plot               = False,
     do_vrec_diagnostic    = False,
     opto_offset_trigger   = True,
@@ -106,8 +105,6 @@ def process_experiment(
         Seconds after blanking window to average for opto response image.
     opto_pre_sec : float
         Seconds before trigger onset to average for opto baseline image.
-    opto_blank_sec : float
-        Blanking period after trigger onset (microscope shutter, ~400 ms).
     do_plot : bool
         True to generate and save a diagnostic summary figure.
     opto_offset_trigger : bool
@@ -161,7 +158,6 @@ def process_experiment(
             'dur_resp':           dur_resp,
             'opto_post_sec':      opto_post_sec,
             'opto_pre_sec':       opto_pre_sec,
-            'opto_blank_sec':     opto_blank_sec,
             'opto_offset_trigger':opto_offset_trigger,
             'chunk_size':         chunk_size,
         },
@@ -278,11 +274,21 @@ def process_experiment(
     # -----------------------------------------------------------------------
     # Step 3 — Parse MarkPoints XML (if 2P opto)
     # -----------------------------------------------------------------------
-    mp_data = None
+    mp_data        = None
+    opto_blank_sec = None
     if is_2p_opto:
         if files['markpoints_xml']:
             print('Parsing MarkPoints XML...')
             mp_data = parse_markpoints_xml(files['markpoints_xml'])
+            if mp_data.get('conditions'):
+                cond     = mp_data['conditions'][0]
+                galvo    = cond.get('galvo', {})
+                init_ms  = galvo.get('initial_delay_ms', 0)
+                dur_ms   = galvo.get('duration_ms', 0)
+                inter_ms = galvo.get('inter_point_delay_ms', 0)
+                reps     = cond.get('repetitions', 1)
+                opto_blank_sec = (init_ms + dur_ms * reps + inter_ms * (reps - 1)) / 1000.0
+                print(f'Opto blanking window (from XML): {opto_blank_sec * 1000:.1f} ms')
         else:
             print('[WARNING] is_2p_opto=True but no MarkPoints XML found.')
 
@@ -682,7 +688,7 @@ def process_experiment(
     for key in ('photostim_2p_frame', 'opto_delta_images', 'cyc_photostim_only'):
         result[key] = None
 
-    if is_2p_opto and opto_ch is not None:
+    if is_2p_opto and opto_ch is not None and opto_blank_sec is not None:
         photostim_triggers = vrec_channel_events[opto_ch]['onsets']
 
         photostim_2p_frame = np.array([
@@ -696,6 +702,7 @@ def process_experiment(
         opto_post_frames  = int(round(opto_post_sec  / frame_period))
 
         result['params'].update({
+            'opto_blank_sec':    opto_blank_sec,
             'opto_blank_frames': opto_blank_frames,
             'opto_post_frames':  opto_post_frames,
             'opto_pre_frames':   opto_pre_frames,
@@ -1338,7 +1345,7 @@ def plot_vrec_diagnostic(result, save_path=None):
     n_vis_total  = len(stim_on_full)        if stim_on_full        is not None else 0
     n_opto_total = len(photostim_trig_full) if photostim_trig_full is not None else 0
 
-    n_diag = min(30 * vrec_sample_rate, vrec.shape[0])
+    n_diag = min(400 * vrec_sample_rate, vrec.shape[0])
     step   = max(1, vrec_sample_rate // 1000)   # downsample to ~1 kHz
     vrec   = vrec[:n_diag:step, :]
 
