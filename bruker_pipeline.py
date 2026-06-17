@@ -232,18 +232,7 @@ def process_experiment(
         result['vrec_channel_events'] = vrec_channel_events
 
         if vis_ch is not None:
-            stim_on_sec = vrec_channel_events[vis_ch]['onsets_sec']
-            vis_sig  = decimate(vrec[:, vis_ch].astype(float), 10, zero_phase=True)
-            vis_sig[vis_sig < 0] = 0
-            vis_diff = np.diff(vis_sig)
-            if len(vis_diff) and (-vis_diff).max() > 0:
-                stim_off_ds, _ = find_peaks(-vis_diff, distance=500,
-                                            height=(-vis_diff).max() * 0.1)
-                stim_off_sec = stim_off_ds / (vrec_sample_rate / 10)
-            else:
-                stim_off_sec = np.array([], dtype=float)
-            result['stim_on_sec']  = stim_on_sec
-            result['stim_off_sec'] = stim_off_sec
+            result['stim_on_sec'] = vrec_channel_events[vis_ch]['onsets_sec']
 
         if opto_ch is not None:
             result['photostim_triggers']     = vrec_channel_events[opto_ch]['onsets']
@@ -852,7 +841,7 @@ def _detect_vrec_events(vrec, vrec_sample_rate, vis_ch, opto_ch):
         else:
             onsets, _ = find_peaks(sig_diff, distance=500,
                                    height=(sig_diff.max() * 0.5))
-        events[col] = {'onsets': onsets,
+        events[col] = {'onsets': onsets * downsample,   # 10 kHz-equivalent indices
                        'onsets_sec': onsets / ds_rate}
     return events
 
