@@ -827,6 +827,7 @@ def _detect_vrec_events(vrec, vrec_sample_rate, vis_ch, opto_ch):
     events     = {}
     for col in range(1, n_cols):
         sig = decimate(vrec[:, col].astype(float), downsample, zero_phase=True)
+        sig[:int(ds_rate)] = 0   # blank first second to suppress onset artifacts
         sig[sig < 0] = 0
         if sig.max() == 0:
             events[col] = {'onsets': np.array([], dtype=int),
@@ -875,6 +876,7 @@ def detect_vrec_channel_layout(vrec, threshold=1.0):
     def _n_events(col_idx):
         """Count positive-going rising-edge events on a channel (downsampled 10×)."""
         sig = decimate(vrec[:, col_idx].astype(float), 10, zero_phase=True)
+        sig[:1000] = 0   # blank first second
         sig[sig < 0] = 0
         sig_diff = np.diff(sig)
         if sig_diff.max() <= 0:
