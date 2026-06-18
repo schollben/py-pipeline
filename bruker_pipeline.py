@@ -674,7 +674,8 @@ def process_experiment(
     # -----------------------------------------------------------------------
     # Initialise opto keys to None (markpoints_* keys are initialised in Step 3b
     # and must NOT be reset here — they are populated regardless of vrec)
-    for key in ('photostim_2p_frame', 'opto_delta_images', 'cyc_photostim_only'):
+    for key in ('photostim_2p_frame', 'opto_delta_images',
+                'opto_trial_delta_images', 'cyc_photostim_only'):
         result[key] = None
 
     if is_2p_opto and opto_ch is not None and opto_blank_sec is not None:
@@ -750,6 +751,25 @@ def process_experiment(
             )
         result['opto_delta_images'] = opto_delta_imgs
 
+        # ── per-trial delta images: one image per trigger, chronological ─────
+        print('Computing per-trial opto delta images...')
+        n_triggers = len(photostim_2p_frame)
+        trial_delta_list = []
+        for ti in range(n_triggers):
+            f0         = int(photostim_2p_frame[ti])
+            post_start = f0 + opto_blank_frames
+            post_stop  = f0 + opto_blank_frames + opto_post_frames
+            if post_stop > num_frames:
+                continue
+            post_avg = np.mean(h[dat_name][post_start:post_stop], axis=0).astype(float)
+            with np.errstate(invalid='ignore', divide='ignore'):
+                trial_delta_list.append(np.where(
+                    opto_baseline != 0,
+                    (post_avg - opto_baseline) / opto_baseline, 0.0,
+                ).astype(np.float32))
+        result['opto_trial_delta_images'] = (
+            np.stack(trial_delta_list) if trial_delta_list else None)
+
         # ── cyc_photostim_only: (n_cells, n_groups, max_trials) ─────────────
         # Per-trial, per-cell dF/F response = mean(post-blank) - mean(pre)
         print('Computing cyc_photostim_only (cells × groups × trials)...')
@@ -787,11 +807,11 @@ def process_experiment(
     # -----------------------------------------------------------------------
     save_result_h5(result, output_dir)
 
-    # Save opto delta images as a float32 TIFF stack (one slice per group)
-    if result.get('opto_delta_images') is not None:
-        tiff_path = os.path.join(output_dir, f'{experiment_id}_opto_delta_images.tif')
-        tifffile.imwrite(tiff_path, result['opto_delta_images'].astype(np.float32))
-        print(f'Opto delta images saved: {tiff_path}')
+    # Save per-trial opto delta images as a float32 TIFF stack
+    if result.get('opto_trial_delta_images') is not None:
+        tiff_path = os.path.join(output_dir, f'{experiment_id}_opto_trial_delta_images.tif')
+        tifffile.imwrite(tiff_path, result['opto_trial_delta_images'])
+        print(f'Opto trial delta images saved: {tiff_path}')
 
     # -----------------------------------------------------------------------
     # Step 14 — Visualization
