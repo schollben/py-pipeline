@@ -4,16 +4,16 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 from bruker_pipeline import process_experiment
 
-######## Set parameters for the experiment to process ########
-DATE            = '05062026'#'06042026'    # acquisition date, format MMDDYYYY
-FILE_NUM        = 4           # TSeries number (e.g. 3 → matches folder ending in -003)
+# Set parameters for the experiment to process
+DATE            = '06042026'    # acquisition date, format MMDDYYYY
+FILE_NUM        = 3             # TSeries number (e.g. 3 → matches folder ending in -003)
 STIM_FILE       = -1            # PsychoPy file, Set to -1 if there is no stimulus file.
-USE_INFERENCE   = True          # True  → use inference.h5
+USE_INFERENCE   = True         # True  → use inference.h5
 DUR_RESP        = 1             # Response window duration in seconds to build the trial-averaged response matrix (cyc)
 
 IS_2P_OPTO      = True          # True  → experiment includes 2-photon photostimulation (optogenetics), Will read MarkPoints XML and compute opto % change images
 OPTO_POST_SEC   = 0.2           # seconds after the blanking window to average (response)
-OPTO_PRE_SEC    = 0.25           # seconds before trigger onset to average (baseline)
+OPTO_PRE_SEC    = 0.5           # seconds before trigger onset to average (baseline)
 
 DO_PLOT         = True          # True → generate and save a summary figure (ROIs, MarkPoints, opto images).
 
@@ -21,7 +21,7 @@ DO_PLOT         = True          # True → generate and save a summary figure (R
 # to the PsychoPy file. Keep True until the bug is fixed in the acquisition software.
 OPTO_OFFSET     = True
 
-######## Run the processing pipeline with the specified parameters ########
+# Run the processing pipeline with the specified parameters 
 if __name__ == '__main__':
     result = process_experiment(
         date                 = DATE,
