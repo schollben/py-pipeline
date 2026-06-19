@@ -17,11 +17,9 @@ OPTO_PRE_SEC    = 0.5           # seconds before trigger onset to average (basel
 
 DO_PLOT         = True          # True → generate and save a summary figure (ROIs, MarkPoints, opto images).
 
-# Known acquisition bug: photostim trigger stream is offset by 1 row relative
+# opto_offset_trigger known acquisition bug: photostim trigger stream is offset by 1 row relative
 # to the PsychoPy file. Keep True until the bug is fixed in the acquisition software.
-OPTO_OFFSET     = True
-
-# Run the processing pipeline with the specified parameters 
+# Run the processing pipeline with the specified parameters
 if __name__ == '__main__':
     result = process_experiment(
         date                 = DATE,
@@ -35,6 +33,8 @@ if __name__ == '__main__':
         opto_pre_sec         = OPTO_PRE_SEC,
         do_plot              = DO_PLOT,
         do_vrec_diagnostic   = False,
-        opto_offset_trigger  = OPTO_OFFSET,
+        opto_offset_trigger  = True,
+        skewness_threshold   = 1,
+        n_plot_cells         = 15,
     )
     

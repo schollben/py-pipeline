@@ -22,6 +22,7 @@ import h5py
 import tifffile
 import roifile
 from scipy.signal import medfilt, find_peaks, decimate
+from scipy.stats import skew
 from tqdm import tqdm
 
 import matplotlib
@@ -78,6 +79,8 @@ def process_experiment(
     opto_offset_trigger   = True,
     chunk_size            = 1000,
     output_dir            = DEFAULT_OUTPUT,
+    skewness_threshold    = 1.0,
+    n_plot_cells          = 15,
 ):
     """
     Process a single Bruker TSeries experiment and return a dict of all
@@ -507,6 +510,17 @@ def process_experiment(
         result['dff_neuropil'] = dff_neuropil
 
     # -----------------------------------------------------------------------
+    # Step 8b — Cell quality: skewness of dF/F
+    # -----------------------------------------------------------------------
+    dff_skewness = skew(dff, axis=0)                        # (n_cells,)
+    is_good_cell = dff_skewness >= skewness_threshold       # (n_cells,) bool
+    result['dff_skewness'] = dff_skewness
+    result['is_good_cell'] = is_good_cell
+    result['params']['skewness_threshold'] = skewness_threshold
+    print(f'Skewness threshold {skewness_threshold:.2f}: '
+          f'{is_good_cell.sum()}/{num_cells} cells classified as good.')
+
+    # -----------------------------------------------------------------------
     # Step 9-11 — Stimulus processing
     # -----------------------------------------------------------------------
 
@@ -699,6 +713,19 @@ def process_experiment(
             'opto_pre_frames':   opto_pre_frames,
         })
 
+        # ── NaN-blank dff during opto pulse periods ──────────────────────────
+        # Set dff to NaN for the shutter-closed window (± 1 frame fudge) so
+        # that downstream analyses (cyc_photostim_only, plots) are not
+        # contaminated by blanking artefacts.
+        _fudge = 1  # extra frames to mask before and after each opto pulse
+        _dff = result['dff']
+        print(f'NaN-blanking dff at {len(photostim_2p_frame)} opto pulse '
+              f'windows ({opto_blank_frames + 2 * _fudge} frames each)...')
+        for _f0 in photostim_2p_frame:
+            _start = max(0, int(_f0) - _fudge)
+            _end   = min(_dff.shape[0], int(_f0) + opto_blank_frames + _fudge + 1)
+            _dff[_start:_end, :] = np.nan
+
         # stim_id is populated whenever stim_file > -1 (see PsychoPy read above)
         opto_stim_id = result.get('stim_id')
         if opto_stim_id is None:
@@ -822,6 +849,10 @@ def process_experiment(
         if result.get('params', {}).get('is_2p_opto') and result.get('opto_delta_images') is not None:
             fig2_path = os.path.join(output_dir, f'{experiment_id}_opto_images.png')
             plot_opto_images(result, save_path=fig2_path)
+        if stim_file > -1 and result.get('cyc') is not None:
+            fig3_path = os.path.join(output_dir, f'{experiment_id}_stim_response.png')
+            plot_stim_response(result, n_cells=n_plot_cells, frame_period=frame_period,
+                               save_path=fig3_path)
         plt.show()
 
     # -----------------------------------------------------------------------
@@ -1066,6 +1097,69 @@ def print_experiment_summary(result):
 # ===========================================================================
 # Visualization
 # ===========================================================================
+
+def plot_stim_response(result, n_cells=15, frame_period=0.033, save_path=None):
+    """
+    Figure 3 — stimulus-response summary for the first n_cells ROIs.
+
+    Each row is one cell with two panels:
+      Left  : trial-averaged dF/F trace per stimulus ID
+      Right : bar chart of peak response per stimulus ID
+    """
+    cyc          = result.get('cyc')           # (n_rois, n_stims, n_trials, n_frames)
+    resp         = result.get('resp')          # (n_rois, n_stims)
+    unique_stims = result.get('unique_stims')  # (n_stims,)
+
+    if cyc is None or resp is None or unique_stims is None:
+        print('[plot_stim_response] Missing cyc/resp/unique_stims — skipping.')
+        return
+
+    n_show   = min(n_cells, cyc.shape[0])
+    n_stims  = len(unique_stims)
+    t_axis   = np.arange(cyc.shape[-1]) * frame_period
+
+    fig, axes = plt.subplots(n_show, 2, figsize=(10, 2.5 * n_show),
+                             squeeze=False)
+    cmap = plt.get_cmap('tab10', n_stims)
+
+    for i in range(n_show):
+        ax_t = axes[i, 0]
+        ax_b = axes[i, 1]
+
+        for s in range(n_stims):
+            mean_trace = np.nanmean(cyc[i, s, :, :], axis=0)
+            ax_t.plot(t_axis, mean_trace, color=cmap(s),
+                      label=f'{int(unique_stims[s])}', linewidth=1.0)
+
+        ax_t.axhline(0, color='k', linewidth=0.5, linestyle='--')
+        ax_t.set_ylabel(f'cell {i}', fontsize=8)
+        ax_t.tick_params(labelsize=7)
+        if i == 0:
+            ax_t.set_title('Trial-avg dF/F', fontsize=9)
+            ax_t.legend(title='stim', fontsize=6, title_fontsize=6,
+                        loc='upper right', ncol=max(1, n_stims // 4))
+
+        peak_vals = resp[i, :]
+        bar_colors = [cmap(s) for s in range(n_stims)]
+        ax_b.bar(range(n_stims), peak_vals, color=bar_colors, width=0.6)
+        ax_b.axhline(0, color='k', linewidth=0.5, linestyle='--')
+        ax_b.set_xticks(range(n_stims))
+        ax_b.set_xticklabels([str(int(s)) for s in unique_stims], fontsize=7)
+        ax_b.tick_params(labelsize=7)
+        if i == 0:
+            ax_b.set_title('Peak response', fontsize=9)
+
+    axes[-1, 0].set_xlabel('Time (s)', fontsize=8)
+    axes[-1, 1].set_xlabel('Stimulus ID', fontsize=8)
+    fig.suptitle(f'Stimulus responses — first {n_show} cells', fontsize=10, y=1.001)
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f'Stimulus response figure saved: {save_path}')
+
+    return fig
+
 
 def plot_experiment_summary(result, save_path=None):
     """
