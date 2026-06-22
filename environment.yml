@@ -7,6 +7,9 @@ dependencies:
   - numpy
   - scipy
   - matplotlib
+  - seaborn
+  - plotly
+  - pandas
   - scikit-image
   - scikit-learn
   - h5py
