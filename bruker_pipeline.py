@@ -910,10 +910,6 @@ def process_experiment(
         if result.get('params', {}).get('is_2p_opto') and result.get('opto_delta_images') is not None:
             fig2_path = os.path.join(output_dir, f'{experiment_id}_opto_images.png')
             plot_opto_images(result, save_path=fig2_path)
-        if stim_file > -1 and result.get('cyc') is not None:
-            fig3_path = os.path.join(output_dir, f'{experiment_id}_stim_response.png')
-            plot_stim_response(result, n_cells=n_plot_cells, frame_period=frame_period,
-                               save_path=fig3_path)
         plt.show()
 
     # -----------------------------------------------------------------------
