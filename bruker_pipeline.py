@@ -548,6 +548,14 @@ def process_experiment(
     for cc in tqdm(range(num_cells), desc='Computing dF/F', ncols=75):
         dff[:, cc] = filter_baseline_dF_comp(raw_traces[:, cc], dff_window)
 
+    # Sanitize divide-by-~0 artefacts: replace any inf/NaN with NaN so the
+    # downstream nanmean/nanstd response machinery handles them gracefully
+    # instead of propagating inf through FFTs and cycle averages.
+    n_bad = int(np.sum(~np.isfinite(dff)))
+    if n_bad:
+        print(f'[dF/F] Replacing {n_bad} non-finite samples (divide-by-~0) with NaN.')
+        dff[~np.isfinite(dff)] = np.nan
+
     dff_neuropil = None
     if do_neuropil:
         dff_neuropil = filter_baseline_dF_comp(raw_neuropil, dff_window)
@@ -558,16 +566,8 @@ def process_experiment(
     if do_neuropil:
         result['dff_neuropil'] = dff_neuropil
 
-    # -----------------------------------------------------------------------
-    # Step 8b — Cell quality: skewness of dF/F
-    # -----------------------------------------------------------------------
-    dff_skewness = skew(dff, axis=0)                        # (n_cells,)
-    is_good_cell = dff_skewness >= skewness_threshold       # (n_cells,) bool
-    result['dff_skewness'] = dff_skewness
-    result['is_good_cell'] = is_good_cell
-    result['params']['skewness_threshold'] = skewness_threshold
-    print(f'Skewness threshold {skewness_threshold:.2f}: '
-          f'{is_good_cell.sum()}/{num_cells} cells classified as good.')
+    # Cell-quality skewness (Step 8b) is computed later, after dff_nan exists
+    # (it must consider the photostim-blanked frames as NaN — see Step 12b).
 
     # -----------------------------------------------------------------------
     # Step 9-11 — Stimulus processing
@@ -763,7 +763,7 @@ def process_experiment(
     # Initialise opto keys to None (markpoints_* keys are initialised in Step 3b
     # and must NOT be reset here — they are populated regardless of vrec)
     for key in ('photostim_2p_frame', 'opto_delta_images',
-                'opto_trial_delta_images', 'cyc_photostim_only'):
+                'opto_trial_delta_images', 'cyc_photostim_only', 'dff_nan'):
         result[key] = None
 
     if is_2p_opto and opto_ch is not None and opto_blank_sec is not None:
@@ -905,6 +905,26 @@ def process_experiment(
     # Close H5 movie
     # -----------------------------------------------------------------------
     h.close()
+
+    # -----------------------------------------------------------------------
+    # Step 12b — Cell quality: skewness of dF/F
+    # -----------------------------------------------------------------------
+    # Use dff_nan (photostim windows blanked to NaN) when available so the
+    # blanking artefacts don't skew the metric; fall back to dff otherwise.
+    # Photostim blanking / baseline divide-by-~0 can also leave inf/NaN in dff,
+    # and scipy.stats.skew propagates any non-finite value to the whole cell
+    # (→ NaN ≥ threshold is False, failing every cell). Mask non-finite samples
+    # to NaN and omit them so the remaining good frames still count.
+    dff_quality = result['dff_nan'] if result.get('dff_nan') is not None else dff
+    dff_finite  = np.where(np.isfinite(dff_quality), dff_quality, np.nan)
+    dff_skewness = skew(dff_finite, axis=0, nan_policy='omit')   # (n_cells,)
+    dff_skewness = np.asarray(dff_skewness, dtype=float)
+    is_good_cell = dff_skewness >= skewness_threshold            # (n_cells,) bool
+    result['dff_skewness'] = dff_skewness
+    result['is_good_cell'] = is_good_cell
+    result['params']['skewness_threshold'] = skewness_threshold
+    print(f'Skewness threshold {skewness_threshold:.2f}: '
+          f'{is_good_cell.sum()}/{num_cells} cells classified as good.')
 
     # -----------------------------------------------------------------------
     # Step 13 — Save result dict to H5

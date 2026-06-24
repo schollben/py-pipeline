@@ -32,7 +32,7 @@ if __name__ == '__main__':
         opto_post_sec        = OPTO_POST_SEC,
         opto_pre_sec         = OPTO_PRE_SEC,
         do_plot              = DO_PLOT,
-        do_vrec_diagnostic   = False,
+        do_vrec_diagnostic   = True,
         opto_offset_trigger  = True,
         skewness_threshold   = 1,
         n_plot_cells         = 15,
