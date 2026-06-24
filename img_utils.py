@@ -383,7 +383,7 @@ def compute_peak_resp(data):
     for ii in range(data.shape[0]):
         # No queeze for python
         data2 = data[ii,:,:]
-        temp_f1, temp_f1s, temp_dc, temp_dcs, _ = compf1wdev(data2)
+        temp_f1, temp_f1s, temp_dc, temp_dcs, _, _ = compf1wdev(data2)
         resp[ii] = temp_f1 + temp_dc
         resps[ii,:] = temp_f1s + temp_dcs
         resperr[ii] = np.nanstd(temp_f1s + temp_dcs) / np.sqrt(data.shape[1])

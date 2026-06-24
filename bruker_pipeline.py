@@ -613,6 +613,13 @@ def process_experiment(
 
     if vis_ch is not None:
         stim_on_sec = vrec_channel_events[vis_ch]['onsets_sec']
+        if len(stim_on_sec) > 1:
+            diffs = np.diff(stim_on_sec)
+            median_iti = np.median(diffs)
+            if stim_on_sec[0] > 2 * median_iti:
+                print(f'[WARNING] First stim trigger gap ({stim_on_sec[0]:.2f} s) is '
+                      f'>2× median ITI ({median_iti:.2f} s) — dropping erroneous first trigger.')
+                stim_on_sec = stim_on_sec[1:]
         frame_triggers_sec = result['frame_triggers_sec']
         stim_on_2p_frame = np.array([
             np.argmin(np.abs(s - frame_triggers_sec))
@@ -667,8 +674,13 @@ def process_experiment(
             if result.get('stim_on_2p_frame') is not None:
                 stim_on_2p = result['stim_on_2p_frame']
                 if len(stim_on_2p) != len(stim_id):
+                    n_use = min(len(stim_on_2p), len(stim_id))
                     print(f'[WARNING] Stim trigger mismatch: '
-                          f'{len(stim_on_2p)} detected vs {len(stim_id)} in stim file!')
+                          f'{len(stim_on_2p)} detected vs {len(stim_id)} in stim file '
+                          f'— using first {n_use} of each.')
+                    result['stim_on_2p_frame'] = stim_on_2p[:n_use]
+                    result['stim_id']          = stim_id[:n_use]
+                    result['unique_stims']     = np.unique(stim_id[:n_use])
                 else:
                     print(f'Stim triggers: {len(stim_on_2p)} ✓')
 
