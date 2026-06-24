@@ -979,19 +979,25 @@ def _detect_vrec_events(vrec, vrec_sample_rate, vis_ch, opto_ch):
         sig = decimate(vrec[:, col].astype(float), downsample, zero_phase=True)
         sig[:int(ds_rate)] = 0   # blank first second to suppress onset artifacts
         sig[sig < 0] = 0
-        if sig.max() == 0:
+        if sig.max() <= 0:
             events[col] = {'onsets': np.array([], dtype=int),
                            'onsets_sec': np.array([], dtype=float)}
             continue
-        sig_diff = np.diff(sig)
-        if sig_diff.max() <= 0:
-            onsets = np.array([], dtype=int)
-        elif col == vis_ch or col == opto_ch:
-            onsets, _ = find_peaks(sig_diff, distance=500,
-                                   height=(sig_diff.max() * 0.1))
+        # Binarize at half-max and take low→high transitions (rising edges only).
+        # Immune to anti-aliasing ringing at pulse offsets, which the derivative
+        # method mis-detected as a second event per pulse.
+        binary  = (sig > sig.max() * 0.5).astype(int)
+        rising  = np.where(np.diff(binary) == 1)[0] + 1
+        # Enforce a minimum gap (refractory) to drop noise-induced double crossings.
+        min_gap = 500   # samples at ds_rate (0.5 s) — same as old `distance`
+        if len(rising):
+            kept = [rising[0]]
+            for r in rising[1:]:
+                if r - kept[-1] >= min_gap:
+                    kept.append(r)
+            onsets = np.array(kept, dtype=int)
         else:
-            onsets, _ = find_peaks(sig_diff, distance=500,
-                                   height=(sig_diff.max() * 0.5))
+            onsets = np.array([], dtype=int)
         events[col] = {'onsets': onsets * downsample,   # 10 kHz-equivalent indices
                        'onsets_sec': onsets / ds_rate}
     return events
@@ -1024,15 +1030,21 @@ def detect_vrec_channel_layout(vrec, threshold=1.0):
     names  = {c: f'Input{c - 1}' for c in range(1, n_cols)}
 
     def _n_events(col_idx):
-        """Count positive-going rising-edge events on a channel (downsampled 10×)."""
+        """Count rising-edge events on a channel (downsampled 10×)."""
         sig = decimate(vrec[:, col_idx].astype(float), 10, zero_phase=True)
         sig[:1000] = 0   # blank first second
         sig[sig < 0] = 0
-        sig_diff = np.diff(sig)
-        if sig_diff.max() <= 0:
+        if sig.max() <= 0:
             return 0
-        evts, _ = find_peaks(sig_diff, distance=500, height=sig_diff.max() * 0.1)
-        return len(evts)
+        binary = (sig > sig.max() * 0.5).astype(int)
+        rising = np.where(np.diff(binary) == 1)[0] + 1
+        if len(rising) == 0:
+            return 0
+        kept = [rising[0]]
+        for r in rising[1:]:
+            if r - kept[-1] >= 500:
+                kept.append(r)
+        return len(kept)
 
     # Count events on all data channels for diagnostic printout
     event_counts = {c: _n_events(c) for c in range(1, n_cols)}
