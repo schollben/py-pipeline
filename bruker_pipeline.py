@@ -643,26 +643,25 @@ def process_experiment(
             if psychopy_data.ndim == 1:
                 psychopy_data = psychopy_data[np.newaxis, :]
 
-            # Known acquisition bug: for 2P opto experiments the trigger
-            # stream is offset by one row relative to the psychopy file.
-            # Dropping row 0 realigns triggers → psychopy rows.
-            if is_2p_opto and opto_offset_trigger:
-                print(f'[opto_offset_trigger=True] Dropping first PsychoPy row '
-                      f'({psychopy_data.shape[0]} → {psychopy_data.shape[0] - 1} rows).')
-                psychopy_data = psychopy_data[1:]
-
             if not is_2p_opto:
                 stim_id         = psychopy_data[:, 0]
                 stim_properties = psychopy_data[:, 1:]
                 result['stim_properties'] = stim_properties
             else:
-                # 2P opto: columns are [target_number, target_trial, (stim_id), ...]
+                # 2P opto: columns are [target_number, target_trial, (vis_stim_id), ...]
+                # Known acquisition bug: photostim trigger stream is offset by one row.
+                # Apply the row-drop only to the photostim columns (0, 1); the visual
+                # stim column (2) is aligned with vis triggers and must NOT be shifted.
+                opto_data = psychopy_data[1:] if opto_offset_trigger else psychopy_data
+                if opto_offset_trigger:
+                    print(f'[opto_offset_trigger=True] Dropping first PsychoPy row for '
+                          f'photostim columns ({psychopy_data.shape[0]} → {opto_data.shape[0]} rows).')
+                result['target_number'] = opto_data[:, 0]
+                result['target_trial']  = opto_data[:, 1]
                 if psychopy_data.shape[1] >= 3:
                     stim_id = psychopy_data[:, 2]
                 else:
-                    stim_id = psychopy_data[:, 0]
-                result['target_number'] = psychopy_data[:, 0]
-                result['target_trial']  = psychopy_data[:, 1]
+                    stim_id = opto_data[:, 0]
                 if psychopy_data.shape[1] > 3:
                     result['stim_properties'] = psychopy_data[:, 3:]
 

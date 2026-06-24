@@ -245,7 +245,7 @@ def gen_stim_cyc(outfile, pre=0, slag=0, dur_resp=2.5):
     stim_on_2p_frame = outfile['stim_on_2p_frame'][:]
     stim_id = outfile['stim_id'][:]
     dff = outfile['dff'][:]
-    n_trials = int(np.floor(len(outfile['stim_id']) / len(outfile['unique_stims'])))
+    n_trials = int(max(np.sum(stim_id == s) for s in unique_stims))
     stim_dur = int(np.round(dur_resp / frame_period))
     cyc_pre  = int(np.round(pre     / frame_period))
     cyc_slag = int(np.round(slag   / frame_period))
@@ -269,6 +269,9 @@ def gen_stim_cyc(outfile, pre=0, slag=0, dur_resp=2.5):
                 else:
                     f = np.full(stim_dur + pre, np.nan)
                     s = np.full(stim_dur + pre, np.nan)
+                if int(trial_list[ind]) >= n_trials:
+                    trial_list[ind] += 1
+                    continue
                 cyc[cc, ind, int(trial_list[ind]), :] = f
                 if outfile['do_cascade'][0]:
                     cyc_spk_inf[cc, ind, int(trial_list[ind]), :] = s
