@@ -513,21 +513,17 @@ def process_experiment(
     nz_neuropil = np.nonzero(neuropil_mask) if do_neuropil else None
 
     n_chunks = math.ceil(num_frames / chunk_size)
-    pixel_sum = np.zeros((size_x, size_y), dtype=np.float64)
 
     for f_i in tqdm(range(n_chunks), desc='Extracting traces', ncols=75):
         start = f_i * chunk_size
         stop  = min((f_i + 1) * chunk_size, num_frames)
         chunk = h[dat_name][start:stop]
-        pixel_sum += chunk.sum(axis=0, dtype=np.float64)
         for cc in range(num_cells):
             raw_traces[start:stop, cc] = np.mean(
                 chunk[:, nz_per_cell[cc][0], nz_per_cell[cc][1]], axis=1)
         if do_neuropil:
             raw_neuropil[start:stop] = np.mean(
                 chunk[:, nz_neuropil[0], nz_neuropil[1]], axis=1)
-
-    result['grand_mean_image'] = (pixel_sum / num_frames).astype(np.float32)
 
     result['raw_traces'] = raw_traces
     if do_neuropil:
@@ -823,9 +819,11 @@ def process_experiment(
         n_opto_ids      = len(opto_unique_ids)
         result['opto_unique_ids'] = opto_unique_ids
 
-        # Baseline: grand mean image accumulated during trace extraction
-        print('Computing opto baseline (grand mean image)...')
-        opto_baseline = result['grand_mean_image'].astype(float)
+        # Baseline: mean of frames at recording seconds 1–5
+        print('Computing opto baseline (recording seconds 1–5)...')
+        bl_start = int(round(1.0 / frame_period))
+        bl_end   = int(round(5.0 / frame_period))
+        opto_baseline = np.mean(h[dat_name][bl_start:bl_end], axis=0).astype(float)
 
         # Per-stim-ID post averages → delta images
         print('Computing per-stim-ID opto % change images...')
@@ -833,7 +831,7 @@ def process_experiment(
 
         for oi, sid in enumerate(tqdm(opto_unique_ids,
                                        desc='Opto delta images', ncols=75)):
-            events   = np.where(opto_group_id == sid)[0]
+            events   = np.where(opto_group_id == sid)[0][:5]
             post_acc = np.zeros((size_x, size_y))
             cnt      = 0
             for ev in events:
@@ -855,11 +853,14 @@ def process_experiment(
             )
         result['opto_delta_images'] = opto_delta_imgs
 
-        # ── per-trial delta images: one image per trigger, chronological ─────
-        print('Computing per-trial opto delta images...')
-        n_triggers = len(photostim_2p_frame)
+        # ── per-trial delta images: first 5 trials per group only ────────────
+        # (early seconds-1–5 baseline is most valid for the earliest photostims)
+        print('Computing per-trial opto delta images (first 5 trials/group)...')
+        keep_events = np.sort(np.concatenate([
+            np.where(opto_group_id == sid)[0][:5] for sid in opto_unique_ids
+        ])) if len(opto_unique_ids) else np.array([], dtype=int)
         trial_delta_list = []
-        for ti in range(n_triggers):
+        for ti in keep_events:
             f0         = int(photostim_2p_frame[ti])
             post_start = f0 + opto_blank_frames
             post_stop  = f0 + opto_blank_frames + opto_post_frames
