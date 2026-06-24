@@ -628,7 +628,21 @@ def process_experiment(
         result['stim_on_2p_frame'] = stim_on_2p_frame
 
     if opto_ch is not None:
-        result['photostim_triggers_sec'] = vrec_channel_events[opto_ch]['onsets_sec']
+        # Drop the erroneous early photostim trigger (gap > 2× median ITI), same as
+        # the visual channel. Kept independent of opto_offset_trigger (PsychoPy row-drop).
+        opto_onsets_sec = vrec_channel_events[opto_ch]['onsets_sec']
+        opto_onsets     = vrec_channel_events[opto_ch]['onsets']
+        if len(opto_onsets_sec) > 1:
+            diffs = np.diff(opto_onsets_sec)
+            median_iti = np.median(diffs)
+            if opto_onsets_sec[0] > 2 * median_iti:
+                print(f'[WARNING] First photostim trigger gap ({opto_onsets_sec[0]:.2f} s) is '
+                      f'>2× median ITI ({median_iti:.2f} s) — dropping erroneous first photostim trigger.')
+                opto_onsets_sec = opto_onsets_sec[1:]
+                opto_onsets     = opto_onsets[1:]
+                vrec_channel_events[opto_ch]['onsets_sec'] = opto_onsets_sec
+                vrec_channel_events[opto_ch]['onsets']     = opto_onsets
+        result['photostim_triggers_sec'] = opto_onsets_sec
 
     # --- Read PsychoPy file whenever stim_file > -1 ---
     if stim_file > -1:
@@ -787,22 +801,25 @@ def process_experiment(
             dff_nan[_start:_end, :] = np.nan
         result['dff_nan'] = dff_nan
 
-        # stim_id is populated whenever stim_file > -1 (see PsychoPy read above)
-        opto_stim_id = result.get('stim_id')
-        if opto_stim_id is None:
-            print(f'[WARNING] No stim_id available (stim_file=-1?) — '
-                  f'treating all {len(photostim_triggers)} triggers as stim_id=0.')
-            opto_stim_id = np.zeros(len(photostim_triggers))
-        elif len(opto_stim_id) != len(photostim_triggers):
-            n_use = min(len(opto_stim_id), len(photostim_triggers))
-            print(f'[WARNING] stim_id count ({len(opto_stim_id)}) != photostim trigger count '
+        # Group delta images by photostim group = target_number (PsychoPy col 0),
+        # averaging over the other stim dimensions. Populated whenever stim_file > -1.
+        opto_group_id = result.get('target_number')
+        if opto_group_id is None:
+            opto_group_id = result.get('stim_id')
+        if opto_group_id is None:
+            print(f'[WARNING] No target_number/stim_id available (stim_file=-1?) — '
+                  f'treating all {len(photostim_triggers)} triggers as group=0.')
+            opto_group_id = np.zeros(len(photostim_triggers))
+        elif len(opto_group_id) != len(photostim_triggers):
+            n_use = min(len(opto_group_id), len(photostim_triggers))
+            print(f'[WARNING] group count ({len(opto_group_id)}) != photostim trigger count '
                   f'({len(photostim_triggers)}) — using first {n_use} of each. '
                   f'Check trigger detection distance parameter.')
-            opto_stim_id       = opto_stim_id[:n_use]
+            opto_group_id      = opto_group_id[:n_use]
             photostim_triggers = photostim_triggers[:n_use]
             photostim_2p_frame = photostim_2p_frame[:n_use]
 
-        opto_unique_ids = np.unique(opto_stim_id)
+        opto_unique_ids = np.unique(opto_group_id)
         n_opto_ids      = len(opto_unique_ids)
         result['opto_unique_ids'] = opto_unique_ids
 
@@ -816,7 +833,7 @@ def process_experiment(
 
         for oi, sid in enumerate(tqdm(opto_unique_ids,
                                        desc='Opto delta images', ncols=75)):
-            events   = np.where(opto_stim_id == sid)[0]
+            events   = np.where(opto_group_id == sid)[0]
             post_acc = np.zeros((size_x, size_y))
             cnt      = 0
             for ev in events:
@@ -863,7 +880,7 @@ def process_experiment(
         dff_arr = result['dff_nan']   # (n_frames, n_cells) — NaN-blanked during opto pulses
         trial_resps = []
         for sid in opto_unique_ids:
-            events = np.where(opto_stim_id == sid)[0]
+            events = np.where(opto_group_id == sid)[0]
             group_trials = []
             for ev in events:
                 f0         = int(photostim_2p_frame[ev])

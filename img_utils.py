@@ -417,7 +417,7 @@ def compf1wdev(data):
         # Use nanmean to handle NaN values in the data
         ff = np.fft.fft(np.nanmean(data, axis=0))
     
-    dc = ff[0] / m
+    dc = (ff[0] / m).real
     f1 = 2 * abs(ff[1] / m)
     f2 = 2 * abs(ff[2] / m)
     angf1 = np.angle(ff[1])
@@ -438,7 +438,7 @@ def compf1wdev(data):
         ff = np.fft.fft(data[j, :])
         singleangle = np.angle(ff[1])
         indf1amp[j] = np.cos(singleangle - angf1) * abs(ff[1] * 2 / m)
-        inddcamp[j] = ff[0] / m
+        inddcamp[j] = (ff[0] / m).real
         
         singleangle = np.angle(ff[2])
         indf2amp[j] = np.cos(singleangle - angf2) * abs(ff[2] * 2 / m)
