@@ -718,13 +718,14 @@ def process_experiment(
         # that downstream analyses (cyc_photostim_only, plots) are not
         # contaminated by blanking artefacts.
         _fudge = 1  # extra frames to mask before and after each opto pulse
-        _dff = result['dff']
-        print(f'NaN-blanking dff at {len(photostim_2p_frame)} opto pulse '
+        dff_nan = result['dff'].copy()
+        print(f'NaN-blanking dff_nan at {len(photostim_2p_frame)} opto pulse '
               f'windows ({opto_blank_frames + 2 * _fudge} frames each)...')
         for _f0 in photostim_2p_frame:
             _start = max(0, int(_f0) - _fudge)
-            _end   = min(_dff.shape[0], int(_f0) + opto_blank_frames + _fudge + 1)
-            _dff[_start:_end, :] = np.nan
+            _end   = min(dff_nan.shape[0], int(_f0) + opto_blank_frames + _fudge + 1)
+            dff_nan[_start:_end, :] = np.nan
+        result['dff_nan'] = dff_nan
 
         # stim_id is populated whenever stim_file > -1 (see PsychoPy read above)
         opto_stim_id = result.get('stim_id')
@@ -800,7 +801,7 @@ def process_experiment(
         # ── cyc_photostim_only: (n_cells, n_groups, max_trials) ─────────────
         # Per-trial, per-cell dF/F response = mean(post-blank) - mean(pre)
         print('Computing cyc_photostim_only (cells × groups × trials)...')
-        dff_arr = result['dff']   # (n_frames, n_cells)
+        dff_arr = result['dff_nan']   # (n_frames, n_cells) — NaN-blanked during opto pulses
         trial_resps = []
         for sid in opto_unique_ids:
             events = np.where(opto_stim_id == sid)[0]

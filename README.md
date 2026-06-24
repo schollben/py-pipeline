@@ -94,6 +94,10 @@ result = process_experiment(
 
 `process_experiment` returns a dict containing all processed variables (traces, trial matrices, opto images, etc.).
 
+For 2P opto experiments the result dict contains two dF/F arrays:
+- `result['dff']` — original dF/F, unmodified (no NaN values)
+- `result['dff_nan']` — copy of dff with NaN inserted at opto pulse windows (± 1 frame fudge around each blanked period); used by downstream opto analyses (`cyc_photostim_only`, plots)
+
 ---
 
 ## File Overview
