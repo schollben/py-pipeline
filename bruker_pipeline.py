@@ -513,17 +513,21 @@ def process_experiment(
     nz_neuropil = np.nonzero(neuropil_mask) if do_neuropil else None
 
     n_chunks = math.ceil(num_frames / chunk_size)
-    
+    pixel_sum = np.zeros((size_x, size_y), dtype=np.float64)
+
     for f_i in tqdm(range(n_chunks), desc='Extracting traces', ncols=75):
         start = f_i * chunk_size
         stop  = min((f_i + 1) * chunk_size, num_frames)
         chunk = h[dat_name][start:stop]
+        pixel_sum += chunk.sum(axis=0, dtype=np.float64)
         for cc in range(num_cells):
             raw_traces[start:stop, cc] = np.mean(
                 chunk[:, nz_per_cell[cc][0], nz_per_cell[cc][1]], axis=1)
         if do_neuropil:
             raw_neuropil[start:stop] = np.mean(
                 chunk[:, nz_neuropil[0], nz_neuropil[1]], axis=1)
+
+    result['grand_mean_image'] = (pixel_sum / num_frames).astype(np.float32)
 
     result['raw_traces'] = raw_traces
     if do_neuropil:
@@ -789,12 +793,11 @@ def process_experiment(
 
         opto_unique_ids = np.unique(opto_stim_id)
         n_opto_ids      = len(opto_unique_ids)
+        result['opto_unique_ids'] = opto_unique_ids
 
-        # Baseline: mean of frames at seconds 1–5 of the recording
-        print('Computing opto baseline (recording seconds 1–5)...')
-        bl_start = int(round(1.0 / frame_period))
-        bl_end   = int(round(5.0 / frame_period))
-        opto_baseline = np.mean(h[dat_name][bl_start:bl_end], axis=0).astype(float)
+        # Baseline: grand mean image accumulated during trace extraction
+        print('Computing opto baseline (grand mean image)...')
+        opto_baseline = result['grand_mean_image'].astype(float)
 
         # Per-stim-ID post averages → delta images
         print('Computing per-stim-ID opto % change images...')
@@ -1401,8 +1404,9 @@ def plot_opto_images(result, save_path=None):
     One subplot per entry in opto_delta_images. Shared red–blue colorscale,
     0 % = white.
     """
-    opto_delta    = result.get('opto_delta_images')
-    experiment_id = result.get('info', {}).get('experiment_id', '')
+    opto_delta      = result.get('opto_delta_images')
+    opto_unique_ids = result.get('opto_unique_ids')
+    experiment_id   = result.get('info', {}).get('experiment_id', '')
 
     if opto_delta is None or len(opto_delta) == 0:
         print('[plot_opto_images] No opto delta images to plot.')
@@ -1428,7 +1432,8 @@ def plot_opto_images(result, save_path=None):
         im  = ax.imshow(opto_delta[oi], cmap='bwr',
                         vmin=-vlim, vmax=vlim,
                         interpolation='nearest')
-        ax.set_title(f'Group {oi + 1}', fontsize=10)
+        sid_label = int(opto_unique_ids[oi]) if opto_unique_ids is not None else oi + 1
+        ax.set_title(f'Group {sid_label}', fontsize=10)
         ax.axis('off')
 
     # Hide unused axes
