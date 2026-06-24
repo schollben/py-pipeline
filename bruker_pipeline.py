@@ -341,7 +341,7 @@ def process_experiment(
         result[key] = None
     for key in ('markpoints_xy_norm', 'markpoints_xy_pix',
                 'markpoints_condition_idx', 'markpoints_laser_power',
-                'markpoints_spiral_diameter_px'):
+                'markpoints_spiral_diameter_px', 'markpoints_group_info'):
         result['Bruker_Acq'][key] = None
 
     if mp_data is not None:
@@ -373,6 +373,51 @@ def process_experiment(
         result['Bruker_Acq']['markpoints_condition_idx']      = np.array(cond_idx_list)
         result['Bruker_Acq']['markpoints_laser_power']        = np.array(laser_powers)
         result['Bruker_Acq']['markpoints_spiral_diameter_px'] = np.array(spiral_diameters_px)
+
+        # ── markpoints_group_info: (n_conds, 4) ──────────────────────────
+        # Columns: [condition_idx, unique_group_id, n_targets, dispersion_um]
+        # Conditions with 100%-overlapping target sets share the same unique_group_id.
+        from itertools import combinations as _combinations
+        _cond_idx_arr = result['Bruker_Acq']['markpoints_condition_idx']
+        _n_conds      = len(mp_data['conditions'])
+        _tol          = 4  # decimal places for normalised-coord rounding
+        _point_sets   = {}
+        for _ci in range(_n_conds):
+            _mask = _cond_idx_arr == _ci
+            _pts  = frozenset(tuple(np.round(xy, _tol)) for xy in xy_norm[_mask])
+            _point_sets[_ci] = _pts
+
+        _uid_map  = np.full(_n_conds, -1, dtype=int)
+        _next_uid = 0
+        for _ci in range(_n_conds):
+            if _uid_map[_ci] >= 0:
+                continue
+            _uid_map[_ci] = _next_uid
+            for _cj in range(_ci + 1, _n_conds):
+                if (_uid_map[_cj] < 0
+                        and _point_sets[_ci] == _point_sets[_cj]
+                        and len(_point_sets[_ci]) > 0):
+                    _uid_map[_cj] = _next_uid
+            _next_uid += 1
+
+        _group_info = np.zeros((_n_conds, 4), dtype=float)
+        for _ci in range(_n_conds):
+            _mask   = _cond_idx_arr == _ci
+            _pts_um = xy_pix[_mask] * um_pp
+            _n      = len(_pts_um)
+            _disp   = float(np.std([
+                np.linalg.norm(_pts_um[i] - _pts_um[j])
+                for i, j in _combinations(range(_n), 2)
+            ])) if _n > 1 else 0.0
+            _group_info[_ci] = [_ci, _uid_map[_ci], _n, _disp]
+        result['Bruker_Acq']['markpoints_group_info'] = _group_info
+
+        if _next_uid < _n_conds:
+            for _uid in range(_next_uid):
+                _members = list(np.where(_uid_map == _uid)[0])
+                _row     = _group_info[_members[0]]
+                print(f'[MarkPoints] Unique group {_uid}: conditions {_members}, '
+                      f'{int(_row[2])} targets, dispersion {_row[3]:.1f} µm')
 
     # -----------------------------------------------------------------------
     # Step 6 — Build cell masks
