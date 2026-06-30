@@ -325,7 +325,15 @@ def process_experiment(
     print(f'Movie: {num_frames} frames, {size_x}×{size_y} px')
 
     n_proj     = min(chunk_size, num_frames)
-    avg_image  = np.mean(h[dat_name][:n_proj], axis=0)
+
+    if files.get('registered_h5'):
+        with h5py.File(files['registered_h5'], 'r') as h_reg:
+            reg_name = list(h_reg.keys())[0]
+            n_avg = min(5000, h_reg[reg_name].shape[0])
+            avg_image = np.mean(h_reg[reg_name][:n_avg], axis=0).astype(np.float32)
+    else:
+        avg_image = np.mean(h[dat_name][:n_proj], axis=0)
+
     result['avg_image'] = avg_image
 
     # Frame time axis in seconds
