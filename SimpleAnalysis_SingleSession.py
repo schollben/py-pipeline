@@ -1,4 +1,7 @@
 # %% 1. initialize
+
+%load_ext autoreload
+%autoreload 2
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -8,20 +11,17 @@ from analysis import rois, responses, tuning, selectivity, maps
 
 sns.set_theme(context='notebook', style='white')
 
-FNAME = '/home/schollab-gaga/Desktop/test/TSeries-07132025-1042-002.h5'
+FNAME = '/mnt/bigdata/PROCESSED/TSeries-07132025-1042-002.h5'
 
 s = load_session(FNAME)
 
 print(f'{s.exp_id}: {s.n_rois} ROIs, '
       f'{len(s.directions)} directions, {len(s.contrasts)} contrasts')
 
-# %% 2. average image with ROI masks
-rois.plot_avg_rois(s)
-plt.show()
+rois.plot_avg_rois(s,vmax_frac=0.6) #average image with ROI mask
 
-# %% 3. trial-averaged time-varying responses (one or more cells)
-responses.plot_stim_traces(s, 5)
-plt.show()
+# %% 2. trial-averaged time-varying responses (one or more cells)
+responses.plot_stim_traces(s, 3)
 
 # %% 4. tuning curves + preferred direction (double-Gaussian fit)
 tuning.plot_tuning_curves(s)

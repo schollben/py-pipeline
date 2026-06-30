@@ -15,11 +15,13 @@ def _roi_type_color(s, cc):
     return 'lime'
 
 
-def plot_avg_rois(s, label=True, ax=None):
+def plot_avg_rois(s, label=True, ax=None, vmax_frac=0.5):
+
     if ax is None:
         _, ax = plt.subplots(figsize=(7, 7))
     ax.imshow(s.avg_image, cmap='gray', interpolation='nearest',
-              vmax=s.avg_image.max() / 2)
+              vmax=s.avg_image.max() * vmax_frac)
+
     for cc in range(s.n_rois):
         color = _roi_type_color(s, cc)
         ax.contour(s.mask2d[cc], levels=[0.5], colors=[color],
@@ -29,10 +31,11 @@ def plot_avg_rois(s, label=True, ax=None):
             if len(pts):
                 cy, cx = pts.mean(axis=0)
                 ax.text(cx, cy, str(cc), ha='center', va='center',
-                        fontsize=6, color='white', fontweight='bold', clip_on=True)
+                        fontsize=6, color='black', fontweight='bold', clip_on=True)
     ax.legend(handles=[mpatches.Patch(color=c, label=k.capitalize())
                        for k, c in _ROI_COLORS.items()],
               loc='upper right', fontsize=8)
+    
     ax.set_title(f'{s.exp_id}  |  {s.n_rois} ROIs')
     ax.axis('off')
     return ax
