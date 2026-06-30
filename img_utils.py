@@ -249,8 +249,12 @@ def gen_stim_cyc(outfile, pre=0, slag=0, dur_resp=2.5):
     stim_dur = int(np.round(dur_resp / frame_period))
     cyc_pre  = int(np.round(pre     / frame_period))
     cyc_slag = int(np.round(slag   / frame_period))
-    cyc         = np.zeros((num_cells, len(unique_stims), n_trials, stim_dur + pre))
-    cyc_spk_inf = np.zeros((num_cells, len(unique_stims), n_trials, stim_dur + pre))
+    # NaN-pad (not zero-pad): stims presented fewer than n_trials times leave
+    # trailing trial slots empty; NaN keeps them out of the downstream
+    # nanmean/nanstd (compf1wdev) instead of biasing resp/resp_err toward 0.
+    # Width uses cyc_pre (frames), matching the tt slice length below.
+    cyc         = np.full((num_cells, len(unique_stims), n_trials, stim_dur + cyc_pre), np.nan)
+    cyc_spk_inf = np.full((num_cells, len(unique_stims), n_trials, stim_dur + cyc_pre), np.nan)
     for cc in tqdm(range(num_cells), desc='Generating stimulus cycles...'):
         #print(f'cell-iter {cc}')
         trial_list = np.zeros(len(unique_stims))
@@ -267,8 +271,8 @@ def gen_stim_cyc(outfile, pre=0, slag=0, dur_resp=2.5):
                     if outfile['do_cascade'][0]:
                         s = outfile['spike_inference'][tt,cc]
                 else:
-                    f = np.full(stim_dur + pre, np.nan)
-                    s = np.full(stim_dur + pre, np.nan)
+                    f = np.full(stim_dur + cyc_pre, np.nan)
+                    s = np.full(stim_dur + cyc_pre, np.nan)
                 if int(trial_list[ind]) >= n_trials:
                     trial_list[ind] += 1
                     continue
@@ -459,6 +463,11 @@ def read_xml_file(fname):
         fname (str): String indicating path to read XML data from.
     Returns:
         rec_info (np.array): Array containing relative frame timing information.
+
+    Raises:
+        FileNotFoundError / ValueError: if the XML cannot be read or parsed.
+            Fails loud rather than returning None, so callers get a clear error
+            instead of a downstream 'NoneType' crash.
     '''
     try:
         tree = ET.parse(fname)
@@ -466,13 +475,11 @@ def read_xml_file(fname):
         # Count the number, then get the values
         rel_frametimes = [child.attrib['relativeTime'] for child in root[2] if child.tag == 'Frame']
         return np.array(rel_frametimes).astype('float')
-    
+
     except FileNotFoundError:
-        print(f'File {fname} was not found.')
-    except ET.ParseError:
-        print(f'Error parsing XML file {fname}')
-    except Exception as e:
-        print('Exception during read_xml_file: ', e)
+        raise FileNotFoundError(f'TSeries XML not found: {fname}')
+    except ET.ParseError as e:
+        raise ValueError(f'Failed to parse TSeries XML {fname}: {e}') from e
 
 def get_target_folders_v2(loc, date, fnames, filetype='TSeries'):
     '''

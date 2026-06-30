@@ -224,7 +224,7 @@ def process_experiment(
         result['vrec']             = vrec
         result['vrec_sample_rate'] = vrec_sample_rate
 
-        ch_layout = detect_vrec_channel_layout(vrec)
+        ch_layout = detect_vrec_channel_layout(vrec, is_2p_opto=is_2p_opto)
         vis_ch  = ch_layout['visual_trigger_ch']
         opto_ch = ch_layout['photostim_ch']
         result['vrec_channel_layout'] = ch_layout['layout']
@@ -575,7 +575,7 @@ def process_experiment(
                 'stim_on_2p_frame', 'stim_id', 'unique_stims',
                 'stim_properties', 'target_number', 'target_trial',
                 'photostim_triggers_sec',
-                'cyc', 'resp', 'resps', 'resp_err', 'stim_avg_images'):
+                'cyc', 'resp', 'resps', 'resp_err'):
         result[key] = None
 
     has_stim = stim_file > -1
@@ -596,8 +596,8 @@ def process_experiment(
     vrec_sample_rate = vrec_meta['sample_rate'] if vrec_meta else 10000
     result['vrec_sample_rate'] = vrec_sample_rate
 
-    # --- Auto-detect channel layout ---
-    ch_layout = detect_vrec_channel_layout(vrec)
+    # --- Channel layout (hardcoded NEW; warns if it looks OLD when opto) ---
+    ch_layout = detect_vrec_channel_layout(vrec, is_2p_opto=is_2p_opto)
     vis_ch  = ch_layout['visual_trigger_ch']
     opto_ch = ch_layout['photostim_ch']
     result['visual_trigger_ch'] = vis_ch
@@ -731,26 +731,6 @@ def process_experiment(
         else:
             print('Too few trials per stimulus — skipping peak response computation.')
 
-        # Per-stimulus average images (~30 frames post onset)
-        n_avg_frames  = int(round(1.0 / frame_period))   # ~1 second
-        stim_on_2p    = result['stim_on_2p_frame'].astype(int)
-        stim_id_arr   = result['stim_id']
-        stim_avg_imgs = np.zeros((n_stims, size_x, size_y))
-
-        for si, sv in enumerate(tqdm(unique_stims,
-                                      desc='Stim avg images', ncols=75)):
-            trials = np.where(stim_id_arr == sv)[0]
-            acc, cnt = np.zeros((size_x, size_y)), 0
-            for ti in trials:
-                onset = stim_on_2p[ti]
-                if onset + n_avg_frames <= num_frames:
-                    acc += np.mean(h[dat_name][onset:onset + n_avg_frames],
-                                   axis=0)
-                    cnt += 1
-            if cnt:
-                stim_avg_imgs[si] = acc / cnt
-
-        result['stim_avg_images'] = stim_avg_imgs
         outfile.close()
 
     # -----------------------------------------------------------------------
@@ -1004,17 +984,22 @@ def _detect_vrec_events(vrec, vrec_sample_rate, vis_ch, opto_ch):
     return events
 
 
-def detect_vrec_channel_layout(vrec, threshold=1.0):
+def detect_vrec_channel_layout(vrec, threshold=1.0, is_2p_opto=False):
     """
     Determine which vrec columns carry visual and photostimulation triggers.
 
     The vrec array columns are: [Time(ms), Input0, Input1, Input2, ...]
     Data channels start at column index 1.
 
-    Fixed channel assignment (hardware convention):
+    Fixed channel assignment (NEW layout — hardware convention, hardcoded):
       Input 0 (col 1) — reserved / other signals, ignored for trigger detection
-      Input 1 (col 2) — visual stimulus trigger (always)
-      Input 2+ (col 3+) — photostim trigger (first active channel found)
+      Input 1 (col 2) — visual stimulus trigger
+      Input 2  (col 3) — photostim trigger
+
+    NOTE: this does NOT auto-detect. The channel assignment is hardcoded to the
+    NEW layout. Some OLD recordings instead use vis=col1/opto=col2; for those,
+    hardcode vis_ch/opto_ch below. When is_2p_opto=True a heuristic warns if the
+    event counts look like an OLD-layout recording (see below).
 
     Triggers are positive-going pulses. Rising-edge detection (diff) is used
     for visual stim; direct peak detection is used for photostim.
@@ -1069,6 +1054,29 @@ def detect_vrec_channel_layout(vrec, threshold=1.0):
           f'(vis=col{vis_ch}/{names.get(vis_ch, "?")} '
           f'[Input 1 — fixed], '
           f'opto=col{opto_ch}/{names.get(opto_ch, "none")})')
+
+    # OLD-layout sanity check (opto only). The NEW layout is hardcoded above:
+    # vis=col2, opto=col3. OLD recordings use vis=col1, opto=col2. We can't tell
+    # which without metadata, but the photostim train is the giveaway: in NEW data
+    # it lives on col3; if col3 is (near-)silent while col2 carries far more events
+    # than the chosen visual channel would, the photostim is probably on col2 and
+    # this is an OLD-layout session. Compare channels against each other so there
+    # is no fixed magic threshold.
+    if is_2p_opto:
+        ev_col1 = event_counts.get(1, 0)   # OLD vis
+        ev_col2 = event_counts.get(2, 0)   # NEW vis  / OLD opto
+        ev_col3 = event_counts.get(3, 0)   # NEW opto
+        # Suspected OLD if the hardcoded photostim channel (col3) has essentially
+        # no events while col2 does, and col1 also carries a visual-like train.
+        old_opto_silent = ev_col3 <= max(1, 0.1 * ev_col2)
+        old_has_two_trains = ev_col1 > 0 and ev_col2 > 0
+        if old_opto_silent and old_has_two_trains:
+            print('[WARNING] vrec layout may be OLD (vis=col1/opto=col2): '
+                  f'col1={ev_col1}, col2={ev_col2}, col3={ev_col3} events — the '
+                  'hardcoded photostim channel (col3) is (near-)silent. '
+                  'If this is an old recording, hardcode vis_ch=1 / opto_ch=2 in '
+                  'detect_vrec_channel_layout() (bruker_pipeline.py, "Visual stim '
+                  'is always Input 1" / "Photostim: hardcoded" lines).')
 
     return {'visual_trigger_ch': vis_ch, 'photostim_ch': opto_ch, 'layout': layout}
 

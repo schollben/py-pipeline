@@ -75,14 +75,19 @@ py-pipeline/
                                → stim_id, unique_stims, stim_properties,
                                  target_number, target_trial (opto only)
 11. (if has_stim) gen_stim_cyc(), compute_peak_resp()
-                               → cyc, resp, resps, resp_err, stim_avg_images
+                               → cyc, resp, resps, resp_err
 12. (if is_2p_opto)
     map photostim triggers     → result['photostim_2p_frame']
                                → result['photostim_triggers_sec']
     opto_baseline              → mean of frames at recording seconds 1–5
                                  (internal; not stored in result)
+    NaN-blank dff at opto pulse windows → dff_nan (used below + by skewness)
     per-stim-ID post averages  → opto_delta_images  (% change vs baseline)
+    per-trial post averages    → opto_trial_delta_images (first 5 trials/group;
+                                 also saved as a float32 TIFF stack)
     per-trial dF/F matrix      → cyc_photostim_only (n_cells × n_groups × max_trials)
+12b. Cell-quality skewness     → dff_skewness, is_good_cell (skew of dff_nan/dff
+                                 per cell vs skewness_threshold)
 13. save_result_h5()           → write result to {experiment_id}.h5
 14. (if do_plot) plot_experiment_summary()  → {experiment_id}_summary.png
     (if is_2p_opto) plot_opto_images()      → {experiment_id}_opto_images.png
@@ -126,7 +131,16 @@ The 400 ms blanking window skips frames where the microscope shutter is closed d
 | Old    | 1                  | 2             |
 | New    | 2                  | 3             |
 
-Auto-detected by `detect_vrec_channel_layout`. All columns are processed regardless; `vis_ch` and `opto_ch` just select the named-variable outputs.
+**The layout is NOT auto-detected.** `detect_vrec_channel_layout` **hardcodes the NEW layout**
+(`vis_ch = 2`, `opto_ch = 3`); all current acquisitions use it. Events are detected on *every*
+column regardless (stored in `vrec_channel_events`); `vis_ch`/`opto_ch` only select the
+named-variable outputs.
+
+For the rare **OLD** recording (`vis=1`, `opto=2`), the channels must be hardcoded by hand in
+`detect_vrec_channel_layout` (the "Visual stim is always Input 1" / "Photostim: hardcoded" lines).
+To help spot these, when `is_2p_opto=True` the function prints a `[WARNING]` if the event counts
+look like an OLD-layout session (the hardcoded photostim channel col 3 is near-silent while col 2
+carries the photostim train) and names the line to edit.
 
 ---
 
@@ -181,6 +195,7 @@ result = {
         'opto_blank_sec':     float,
         'opto_offset_trigger':bool,
         'chunk_size':         int,
+        'skewness_threshold': float,  # dff_skewness cutoff for is_good_cell
         'dff_window_frames':  int,    # baseline window for dF/F computation
         'dff_window_sec':     float,
         # populated only if is_2p_opto=True:
@@ -195,6 +210,8 @@ result = {
     'is_dendrite': np.ndarray,   # (n_rois,) bool
     'is_spine':    np.ndarray,   # (n_rois,) bool
     'mask2d':      np.ndarray,   # (n_rois, size_x, size_y)
+    'dff_skewness':np.ndarray,   # (n_rois,) skewness of dff (dff_nan if opto)
+    'is_good_cell':np.ndarray,   # (n_rois,) bool: dff_skewness >= skewness_threshold
 
     # ── Imaging ───────────────────────────────────────────────────────────
     'avg_image':      np.ndarray,   # (size_x, size_y) mean of first chunk_size frames
@@ -203,12 +220,16 @@ result = {
     # ── Fluorescence traces ───────────────────────────────────────────────
     'raw_traces':   np.ndarray,   # (n_frames, n_rois)
     'dff':          np.ndarray,   # (n_frames, n_rois)
+    'dff_nan':      np.ndarray,   # (n_frames, n_rois) copy of dff with opto pulse
+                                  # windows set to NaN; None unless is_2p_opto
     # only if do_neuropil=True:
     'raw_neuropil': np.ndarray,   # (n_frames,)
     'dff_neuropil': np.ndarray,   # (n_frames,)
 
     # ── VoltageRecording ──────────────────────────────────────────────────
     'vrec_sample_rate':    int,    # typically 10000 Hz
+    'visual_trigger_ch':   int,    # vrec column index for visual triggers (None if absent)
+    'photostim_ch':        int,    # vrec column index for photostim triggers (None if absent)
     'vrec_channel_events': dict,   # {col_idx: {'onsets': ndarray, 'onsets_sec': ndarray}}
                                    # populated for every non-time column
 
@@ -232,7 +253,6 @@ result = {
     'resp':         np.ndarray,   # (n_rois, n_stims) mean peak response
     'resps':        np.ndarray,   # (n_rois, n_stims, n_trials) per-trial peak
     'resp_err':     np.ndarray,   # (n_rois, n_stims) SEM
-    'stim_avg_images': np.ndarray,# (n_stims, size_x, size_y) mean frame per stim
 
     # ── MarkPoints ROI mapping (opto only) ────────────────────────────────
     'roi_photostim_point':    np.ndarray,  # (n_rois,) markpoint index, -1=none
@@ -242,9 +262,13 @@ result = {
 
     # ── 2P opto images and responses (opto only) ─────────────────────────
     # populated only if is_2p_opto=True and opto_ch detected:
+    'opto_unique_ids':    np.ndarray,  # sorted unique opto group IDs (= target_number)
     'opto_delta_images':  np.ndarray,  # (n_groups, size_x, size_y)
                                        # % change = (post_avg - baseline) / baseline
                                        # baseline = mean of recording seconds 1–5
+    'opto_trial_delta_images': np.ndarray,  # (n_kept_trials, size_x, size_y) per-trial
+                                       # % change, first 5 trials/group; also written as a
+                                       # float32 TIFF stack ({experiment_id}_opto_trial_delta_images.tif)
     'cyc_photostim_only': np.ndarray,  # (n_rois, n_groups, max_trials) NaN-padded
                                        # value = mean(post) - mean(pre) dF/F per trial
 }
