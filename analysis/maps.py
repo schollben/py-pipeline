@@ -1,16 +1,21 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib import cm
-from matplotlib.colors import hsv_to_rgb
+from matplotlib.colors import hsv_to_rgb, LinearSegmentedColormap
 
 
 def _pastel(frac, sat):
-    """Map a [0,1) hue to a pastel-HSV RGB (blended toward white)."""
-    rgb = np.array(hsv_to_rgb([frac, 1.0, 1.0]))
+    rgb = np.array(hsv_to_rgb([frac % 1.0, 1.0, 1.0]))
     return rgb * sat + (1 - sat)
 
 
-def _draw_map(ax, s, pref, period, flag, sat, title, cmap_name):
+def _pastel_cmap(sat, n=256):
+    colors = [_pastel(i / n, sat) for i in range(n)]
+    colors.append(_pastel(0.0, sat))  # wrap: end == start
+    return LinearSegmentedColormap.from_list('pastel_hsv', colors, N=n)
+
+
+def _draw_map(ax, s, pref, period, flag, sat, title):
+    cmap = _pastel_cmap(sat)
     ax.imshow(s.avg_image, cmap='gray', vmax=s.avg_image.max() / 2)
     for cc in range(s.n_rois):
         m = s.mask2d[cc] > 0.5
@@ -22,17 +27,15 @@ def _draw_map(ax, s, pref, period, flag, sat, title, cmap_name):
                   alpha=m.astype(float))
     ax.set_title(title)
     ax.axis('off')
-    sm = cm.ScalarMappable(cmap=cmap_name)
+    sm = plt.cm.ScalarMappable(cmap=cmap)
     sm.set_array([0, period])
     plt.colorbar(sm, ax=ax, fraction=0.046, label='deg')
 
 
 def plot_preference_maps(s, thr=0.1, sat=0.5):
     fig, (axd, axo) = plt.subplots(1, 2, figsize=(13, 6))
-    _draw_map(axd, s, s.pref_dir, 360, s.gdsi >= thr, sat,
-              'Direction preference', 'hsv')
-    _draw_map(axo, s, s.pref_dir, 180, s.gosi >= thr, sat,
-              'Orientation preference', 'hsv')
+    _draw_map(axd, s, s.pref_dir, 360, s.gdsi >= thr, sat, 'Direction preference')
+    _draw_map(axo, s, s.pref_dir, 180, s.gosi >= thr, sat, 'Orientation preference')
     fig.suptitle(s.exp_id)
     fig.tight_layout()
     return fig

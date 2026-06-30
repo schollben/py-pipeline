@@ -7,7 +7,6 @@ _ARRAYS = ['avg_image', 'mask2d', 'dff', 'unique_stims', 'stim_id',
            'stim_properties', 'cyc', 'resp', 'resp_err', 'resps',
            'is_soma', 'is_dendrite', 'is_spine', 'is_good_cell']
 
-
 @dataclass
 class Session:
     path: str

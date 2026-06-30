@@ -44,16 +44,17 @@ def fit_direction_tuning(dirs, resps_top):
 
 
 def plot_tuning_curves(s, cells=None):
+
     if cells is None:
         cells = np.arange(s.n_rois)
+    
     cells = np.atleast_1d(cells)
     dirs, cons = s.directions, s.contrasts
     shades = sns.color_palette('Greys', n_colors=len(cons) + 1)[1:]
 
-    ncol = min(10, len(cells))
+    ncol = min(6, len(cells)) #minimum number of cells per row is 8 or whatever you want to set
     nrow = int(np.ceil(len(cells) / ncol))
-    fig, axes = plt.subplots(nrow, ncol, figsize=(2 * ncol, 2 * nrow),
-                             squeeze=False)
+    fig, axes = plt.subplots(nrow, ncol, figsize=(2 * ncol, 2 * nrow), squeeze=False)
     axes = axes.ravel()
     fine = np.linspace(0, 360, 361)
 
