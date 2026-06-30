@@ -10,6 +10,7 @@ FILE_NUM        = 2            # TSeries number (e.g. 3 → matches folder endin
 STIM_FILE       = 1            # PsychoPy file, Set to -1 if there is no stimulus file.
 USE_INFERENCE   = True         # True  → use inference.h5
 DUR_RESP        = 2             # Response window duration in seconds to build the trial-averaged response matrix (cyc)
+PRE_RESP        = 0.5             # Pre-stimulus window duration in seconds prepended to each cyc trial (0 = no pre)
 
 IS_2P_OPTO      = False          # True  → experiment includes 2-photon photostimulation (optogenetics), Will read MarkPoints XML and compute opto % change images
 OPTO_POST_SEC   = 0.5           # seconds after the blanking window to average (response)
@@ -29,6 +30,7 @@ if __name__ == '__main__':
         use_inference        = USE_INFERENCE,
         do_neuropil          = False,
         dur_resp             = DUR_RESP,
+        pre_resp             = PRE_RESP,
         opto_post_sec        = OPTO_POST_SEC,
         opto_pre_sec         = OPTO_PRE_SEC,
         do_plot              = DO_PLOT,

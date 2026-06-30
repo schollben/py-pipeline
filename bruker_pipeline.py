@@ -72,6 +72,7 @@ def process_experiment(
     use_inference  = False,
     do_neuropil    = False,
     dur_resp       = 2.5,
+    pre_resp       = 0,
     opto_post_sec  = 1.0,
     opto_pre_sec   = 0.5,
     do_plot               = False,
@@ -707,7 +708,7 @@ def process_experiment(
         if do_neuropil:
             neuropil_subtraction(outfile=outfile, roi_list=roi_list)
 
-        gen_stim_cyc(outfile=outfile, pre=0, slag=0, dur_resp=dur_resp)
+        gen_stim_cyc(outfile=outfile, pre=pre_resp, slag=0, dur_resp=dur_resp)
 
         unique_stims = result['unique_stims']
         n_stims      = len(unique_stims)
