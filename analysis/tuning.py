@@ -71,8 +71,8 @@ def plot_tuning_curves(s, cells=None):
                         lw=1, marker='o', ms=2, capsize=0)
         fit = fit_direction_tuning(top_dirs, s.resps[cc, top_ids])
         if fit['success']:
-            ax.plot(fine, double_gaussian(fine, *fit['params']),
-                    color='crimson', lw=1)
+            # ax.plot(fine, double_gaussian(fine, *fit['params']),
+            #         color='crimson', lw=1)
             ax.axvline(fit['pref_dir'], color='crimson', ls='--', lw=1)
             pref_dir[cc] = fit['pref_dir']
             fit_params[cc] = fit['params']
