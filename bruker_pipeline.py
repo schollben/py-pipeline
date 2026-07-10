@@ -785,6 +785,8 @@ def process_experiment(
         opto_blank_frames = int(round(opto_blank_sec / frame_period))
         opto_pre_frames   = int(round(opto_pre_sec   / frame_period))
         opto_post_frames  = int(round(opto_post_sec  / frame_period))
+        print(f'opto_blank_frames: {opto_blank_frames} '
+              f'({opto_blank_sec * 1000:.1f} ms at {1/frame_period:.1f} Hz)')
 
         result['params'].update({
             'opto_blank_sec':    opto_blank_sec,
@@ -890,8 +892,8 @@ def process_experiment(
                 post_stop  = f0 + opto_blank_frames + opto_post_frames
                 if pre_start < 0 or post_stop > num_frames:
                     continue
-                baseline = np.mean(dff_arr[pre_start:f0], axis=0)
-                response = np.mean(dff_arr[post_start:post_stop], axis=0)
+                baseline = np.nanmean(dff_arr[pre_start:f0], axis=0)
+                response = np.nanmean(dff_arr[post_start:post_stop], axis=0)
                 group_trials.append(response - baseline)
             trial_resps.append(group_trials)
 
