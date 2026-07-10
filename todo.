@@ -1,8 +1,25 @@
 Goal: build functions and 'analysis' folder and add onto cell -by-cell script called 'SimpleAnalysis'
 Specific Goals: add in analyses and plots for experiments involving holographic photostimulation
 
-1. 
+1. trial-averaged activity per group. each group, grab all photostimulation trials associated with that group. compute cyc or trial-averaged activity traces for both the target cells and all other cells. then create a heatmap of cell activity. 
+rows = cells, columns = time before and after photostimulation. use the coolwarm colormap.
+we need a way to label or denote the targeted cells for each group. this could be an outline or a purple dot next to the specific row for each cell targeted in that group. 
+each group average response heatmap should be plotted as a separate subplot. 2 groups = 2 subplots, shown side by side.
+this function should have an argument to plot either (1) cell-by-cell average values (2) values normalized per cell or (3) z-scored average values
 
-2. 
+2. we need a function to compute influence from the drive for a specific group of targets. this is where we need to be careful about the group IDs in markpoints and the number of unique group IDs.
+to compute influence, we will compare average responses across stimulus IDs between photostim WITH power greater than zero and with power = 0 (sham). For now we can use a simple normalized subtraction.
+that is, influence = (photostimulation_Response - sham_Response)/sham_Response. for now, use peak responses, not cyc. 
 
-3. 
+once influence is collected on a per group basis, we want to visualize the organization of influence, first ignoring stimulus-specific modulations. 
+for each nontarget cell, we should compute the grand mean influence across stimulus IDs. then, using the cell masks, plot the cells and color-code them based on influence.
+use the PRGn colormap. there should be 1 2-D image map for each unique group. target cells should have a puple outline. nontarget cells should have a gray outline.  the facecolor psuedo-colored by influence value. 
+
+3. we need to expland on the point above (#2) to examine per-group influence as a function of stimulus properties. the first function should example spatial organization of influence dependent on stimulus contrast (ignorning orientation/direction).
+typically we have 3 contrasts (0, low, high). 
+
+this needs to be well organized code and simple clear functions. we will likely need to add or adapt later on. 
+ask questions to gain clarifications for planning.
+
+_____
+
