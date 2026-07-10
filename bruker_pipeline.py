@@ -703,6 +703,27 @@ def process_experiment(
                     print(f'Stim triggers: {len(stim_on_2p)} ✓')
 
     # -----------------------------------------------------------------------
+    # Step 10b — Pre-blank dff for opto experiments before building cyc
+    # NaN-blank dff_nan now (before Step 11) so gen_stim_cyc uses clean traces.
+    # -----------------------------------------------------------------------
+    result['dff_nan'] = None
+    if is_2p_opto and result.get('photostim_triggers_sec') is not None and opto_blank_sec is not None:
+        opto_blank_frames = int(round(opto_blank_sec / frame_period))
+        _fudge = 1
+        photostim_2p_frame_early = np.array([
+            np.argmin(np.abs(ps - result['frame_triggers_sec']))
+            for ps in result['photostim_triggers_sec']
+        ], dtype=int)
+        dff_nan = result['dff'].copy()
+        print(f'NaN-blanking dff_nan at {len(photostim_2p_frame_early)} opto pulse '
+              f'windows ({opto_blank_frames + 2 * _fudge} frames each)...')
+        for _f0 in photostim_2p_frame_early:
+            _start = max(0, int(_f0) - _fudge)
+            _end   = min(dff_nan.shape[0], int(_f0) + opto_blank_frames + _fudge + 1)
+            dff_nan[_start:_end, :] = np.nan
+        result['dff_nan'] = dff_nan
+
+    # -----------------------------------------------------------------------
     # Step 11 — Response analysis (stimulus present, not spontaneous)
     # -----------------------------------------------------------------------
     if has_stim and result['stim_id'] is not None:
@@ -748,7 +769,7 @@ def process_experiment(
     # Initialise opto keys to None (markpoints_* keys are initialised in Step 3b
     # and must NOT be reset here — they are populated regardless of vrec)
     for key in ('photostim_2p_frame', 'opto_delta_images',
-                'opto_trial_delta_images', 'cyc_photostim_only', 'dff_nan'):
+                'opto_trial_delta_images', 'cyc_photostim_only'):
         result[key] = None
 
     if is_2p_opto and opto_ch is not None and opto_blank_sec is not None:
@@ -772,19 +793,9 @@ def process_experiment(
             'opto_pre_frames':   opto_pre_frames,
         })
 
-        # ── NaN-blank dff during opto pulse periods ──────────────────────────
-        # Set dff to NaN for the shutter-closed window (± 1 frame fudge) so
-        # that downstream analyses (cyc_photostim_only, plots) are not
-        # contaminated by blanking artefacts.
-        _fudge = 1  # extra frames to mask before and after each opto pulse
-        dff_nan = result['dff'].copy()
-        print(f'NaN-blanking dff_nan at {len(photostim_2p_frame)} opto pulse '
-              f'windows ({opto_blank_frames + 2 * _fudge} frames each)...')
-        for _f0 in photostim_2p_frame:
-            _start = max(0, int(_f0) - _fudge)
-            _end   = min(dff_nan.shape[0], int(_f0) + opto_blank_frames + _fudge + 1)
-            dff_nan[_start:_end, :] = np.nan
-        result['dff_nan'] = dff_nan
+        # dff_nan already computed in Step 10b (before gen_stim_cyc) so that
+        # cyc uses NaN-blanked traces. Reuse it here for downstream opto analyses.
+        dff_nan = result['dff_nan']
 
         # Group delta images by photostim group = target_number (PsychoPy col 0),
         # averaging over the other stim dimensions. Populated whenever stim_file > -1.
@@ -1828,7 +1839,8 @@ def _populate_outfile(outfile, result, num_frames):
     outfile.create_dataset('frame_period',     data=np.array([fp]))
     outfile.create_dataset('do_cascade',       data=np.array([False]))
     outfile.create_dataset('stim_file',        data=result.get('params', {}).get('stim_file_num', -1))
-    outfile.create_dataset('dff',              data=result['dff'])
+    dff_for_cyc = result['dff_nan'] if result.get('dff_nan') is not None else result['dff']
+    outfile.create_dataset('dff',              data=dff_for_cyc)
     outfile.create_dataset('is_dendrite',      data=result['is_dendrite'])
     outfile.create_dataset('is_spine',         data=result['is_spine'])
     outfile.create_dataset('is_soma',          data=result['is_soma'])

@@ -11,7 +11,8 @@ from analysis import load_session, plot_avg_rois, plot_stim_traces, plot_tuning_
 
 sns.set_theme(context='notebook', style='white')
 
-FNAME = '/mnt/bigdata/PROCESSED/TSeries-07132025-1042-002.h5'
+# FNAME = '/mnt/bigdata/PROCESSED/TSeries-07132025-1042-002.h5'
+FNAME = '/mnt/bigdata/PROCESSED/TSeries-07132025-1042-003.h5'
 
 dat = load_session(FNAME)
 
@@ -23,14 +24,12 @@ plot_avg_rois(dat,vmax_frac=0.6)
 
 
 # %% 2. trial-averaged time-varying responses (one or more cells)
-plot_stim_traces(dat, [5,50,70]); #example: cells 5, 50, 70
+plot_stim_traces(dat, [1,2,3,4,5]); #example: cells 5, 50, 70
 
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit)
+# and compute direction / orientation selectivit
 plot_tuning_curves(dat);
-
-
-# %% 4. direction / orientation selectivity
 compute_selectivity(dat);
 print(f'gDSI median {np.nanmedian(dat.gdsi):.3f}  |  gOSI median {np.nanmedian(dat.gosi):.3f}')
 
