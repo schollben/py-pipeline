@@ -6,8 +6,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from analysis.session import load_session
-from analysis import load_session, plot_avg_rois, plot_stim_traces, plot_tuning_curves, compute_selectivity, plot_preference_maps
+from analysis import (load_session, plot_avg_rois, plot_stim_traces, plot_tuning_curves,
+                      compute_selectivity, plot_preference_maps, describe_photostim_groups,
+                      plot_photostim_group_heatmaps, compute_influence, plot_influence_maps,
+                      plot_influence_by_contrast)
 
 sns.set_theme(context='notebook', style='white')
 
@@ -38,5 +40,17 @@ print(f'gDSI median {np.nanmedian(dat.gdsi):.3f}  |  gOSI median {np.nanmedian(d
 plot_preference_maps(dat, thr=0.1);
 
 
-# %% 6. photostimulation group dF/F activity 
+# %% 6. photostimulation group dF/F activity
+describe_photostim_groups(dat)
+plot_photostim_group_heatmaps(dat, mode='zscore');
+
+
+# %% 7. influence maps (photostim vs sham)
+compute_influence(dat);
+plot_influence_maps(dat);
+
+
+# %% 8. influence maps by stimulus contrast
+plot_influence_by_contrast(dat);
+
 

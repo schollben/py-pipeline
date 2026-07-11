@@ -5,7 +5,12 @@ import h5py
 
 _ARRAYS = ['avg_image', 'mask2d', 'dff', 'unique_stims', 'stim_id',
            'stim_properties', 'cyc', 'resp', 'resp_err', 'resps',
-           'is_soma', 'is_dendrite', 'is_spine', 'is_good_cell']
+           'is_soma', 'is_dendrite', 'is_spine', 'is_good_cell',
+           'target_number', 'target_trial', 'roi_photostim_group',
+           'roi_photostim_point', 'markpoint_assigned_roi', 'opto_unique_ids']
+
+_BRUKER_ACQ_ARRAYS = ['markpoints_group_info', 'markpoints_laser_power',
+                      'markpoints_condition_idx']
 
 @dataclass
 class Session:
@@ -27,11 +32,22 @@ class Session:
     is_dendrite: np.ndarray = None
     is_spine: np.ndarray = None
     is_good_cell: np.ndarray = None
+    # photostimulation (opto) — None when the session has no photostim data
+    target_number: np.ndarray = None
+    target_trial: np.ndarray = None
+    roi_photostim_group: np.ndarray = None
+    roi_photostim_point: np.ndarray = None
+    markpoint_assigned_roi: np.ndarray = None
+    opto_unique_ids: np.ndarray = None
+    markpoints_group_info: np.ndarray = None
+    markpoints_laser_power: np.ndarray = None
+    markpoints_condition_idx: np.ndarray = None
     # derived (filled by tools)
     pref_dir: np.ndarray = None
     gdsi: np.ndarray = None
     gosi: np.ndarray = None
     fit_params: np.ndarray = None
+    influence: dict = None
     _stim_table: np.ndarray = field(default=None, repr=False)
 
     @property
@@ -41,6 +57,11 @@ class Session:
     @property
     def contrasts(self):
         return np.unique(self.stim_properties[:, 1])
+
+    @property
+    def has_photostim(self):
+        return (self.target_number is not None
+                and self.markpoints_laser_power is not None)
 
     @property
     def stim_table(self):
@@ -65,6 +86,11 @@ def load_session(path):
             kw[k] = d
         n_rois = int(f['n_rois'][()])
         frame_period = float(f['Bruker_Acq']['frame_period'][()])
+        for k in _BRUKER_ACQ_ARRAYS:
+            d = f['Bruker_Acq'][k][:] if k in f['Bruker_Acq'] else None
+            if d is not None and d.size == 0:
+                d = None
+            kw[k] = d
     if kw['stim_properties'] is None or kw['stim_id'] is None:
         raise ValueError(f'{exp_id}: no visual stimulus data in this session.')
     return Session(path=path, exp_id=exp_id, n_rois=n_rois,
