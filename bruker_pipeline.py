@@ -22,6 +22,7 @@ import h5py
 import tifffile
 import roifile
 from scipy.signal import medfilt, find_peaks, decimate
+from scipy.stats import skew
 from tqdm import tqdm
 
 import matplotlib
@@ -71,6 +72,7 @@ def process_experiment(
     use_inference  = False,
     do_neuropil    = False,
     dur_resp       = 2.5,
+    pre_resp       = 0,
     opto_post_sec  = 1.0,
     opto_pre_sec   = 0.5,
     do_plot               = False,
@@ -78,6 +80,8 @@ def process_experiment(
     opto_offset_trigger   = True,
     chunk_size            = 1000,
     output_dir            = DEFAULT_OUTPUT,
+    skewness_threshold    = 1.0,
+    n_plot_cells          = 15,
 ):
     """
     Process a single Bruker TSeries experiment and return a dict of all
@@ -221,7 +225,7 @@ def process_experiment(
         result['vrec']             = vrec
         result['vrec_sample_rate'] = vrec_sample_rate
 
-        ch_layout = detect_vrec_channel_layout(vrec)
+        ch_layout = detect_vrec_channel_layout(vrec, is_2p_opto=is_2p_opto)
         vis_ch  = ch_layout['visual_trigger_ch']
         opto_ch = ch_layout['photostim_ch']
         result['vrec_channel_layout'] = ch_layout['layout']
@@ -321,7 +325,15 @@ def process_experiment(
     print(f'Movie: {num_frames} frames, {size_x}×{size_y} px')
 
     n_proj     = min(chunk_size, num_frames)
-    avg_image  = np.mean(h[dat_name][:n_proj], axis=0)
+
+    if files.get('registered_h5'):
+        with h5py.File(files['registered_h5'], 'r') as h_reg:
+            reg_name = list(h_reg.keys())[0]
+            n_avg = min(5000, h_reg[reg_name].shape[0])
+            avg_image = np.mean(h_reg[reg_name][:n_avg], axis=0).astype(np.float32)
+    else:
+        avg_image = np.mean(h[dat_name][:n_proj], axis=0)
+
     result['avg_image'] = avg_image
 
     # Frame time axis in seconds
@@ -338,7 +350,7 @@ def process_experiment(
         result[key] = None
     for key in ('markpoints_xy_norm', 'markpoints_xy_pix',
                 'markpoints_condition_idx', 'markpoints_laser_power',
-                'markpoints_spiral_diameter_px'):
+                'markpoints_spiral_diameter_px', 'markpoints_group_info'):
         result['Bruker_Acq'][key] = None
 
     if mp_data is not None:
@@ -370,6 +382,51 @@ def process_experiment(
         result['Bruker_Acq']['markpoints_condition_idx']      = np.array(cond_idx_list)
         result['Bruker_Acq']['markpoints_laser_power']        = np.array(laser_powers)
         result['Bruker_Acq']['markpoints_spiral_diameter_px'] = np.array(spiral_diameters_px)
+
+        # ── markpoints_group_info: (n_conds, 4) ──────────────────────────
+        # Columns: [condition_idx, unique_group_id, n_targets, dispersion_um]
+        # Conditions with 100%-overlapping target sets share the same unique_group_id.
+        from itertools import combinations as _combinations
+        _cond_idx_arr = result['Bruker_Acq']['markpoints_condition_idx']
+        _n_conds      = len(mp_data['conditions'])
+        _tol          = 4  # decimal places for normalised-coord rounding
+        _point_sets   = {}
+        for _ci in range(_n_conds):
+            _mask = _cond_idx_arr == _ci
+            _pts  = frozenset(tuple(np.round(xy, _tol)) for xy in xy_norm[_mask])
+            _point_sets[_ci] = _pts
+
+        _uid_map  = np.full(_n_conds, -1, dtype=int)
+        _next_uid = 0
+        for _ci in range(_n_conds):
+            if _uid_map[_ci] >= 0:
+                continue
+            _uid_map[_ci] = _next_uid
+            for _cj in range(_ci + 1, _n_conds):
+                if (_uid_map[_cj] < 0
+                        and _point_sets[_ci] == _point_sets[_cj]
+                        and len(_point_sets[_ci]) > 0):
+                    _uid_map[_cj] = _next_uid
+            _next_uid += 1
+
+        _group_info = np.zeros((_n_conds, 4), dtype=float)
+        for _ci in range(_n_conds):
+            _mask   = _cond_idx_arr == _ci
+            _pts_um = xy_pix[_mask] * um_pp
+            _n      = len(_pts_um)
+            _disp   = float(np.std([
+                np.linalg.norm(_pts_um[i] - _pts_um[j])
+                for i, j in _combinations(range(_n), 2)
+            ])) if _n > 1 else 0.0
+            _group_info[_ci] = [_ci, _uid_map[_ci], _n, _disp]
+        result['Bruker_Acq']['markpoints_group_info'] = _group_info
+
+        if _next_uid < _n_conds:
+            for _uid in range(_next_uid):
+                _members = list(np.where(_uid_map == _uid)[0])
+                _row     = _group_info[_members[0]]
+                print(f'[MarkPoints] Unique group {_uid}: conditions {_members}, '
+                      f'{int(_row[2])} targets, dispersion {_row[3]:.1f} µm')
 
     # -----------------------------------------------------------------------
     # Step 6 — Build cell masks
@@ -465,7 +522,7 @@ def process_experiment(
     nz_neuropil = np.nonzero(neuropil_mask) if do_neuropil else None
 
     n_chunks = math.ceil(num_frames / chunk_size)
-    
+
     for f_i in tqdm(range(n_chunks), desc='Extracting traces', ncols=75):
         start = f_i * chunk_size
         stop  = min((f_i + 1) * chunk_size, num_frames)
@@ -496,6 +553,14 @@ def process_experiment(
     for cc in tqdm(range(num_cells), desc='Computing dF/F', ncols=75):
         dff[:, cc] = filter_baseline_dF_comp(raw_traces[:, cc], dff_window)
 
+    # Sanitize divide-by-~0 artefacts: replace any inf/NaN with NaN so the
+    # downstream nanmean/nanstd response machinery handles them gracefully
+    # instead of propagating inf through FFTs and cycle averages.
+    n_bad = int(np.sum(~np.isfinite(dff)))
+    if n_bad:
+        print(f'[dF/F] Replacing {n_bad} non-finite samples (divide-by-~0) with NaN.')
+        dff[~np.isfinite(dff)] = np.nan
+
     dff_neuropil = None
     if do_neuropil:
         dff_neuropil = filter_baseline_dF_comp(raw_neuropil, dff_window)
@@ -505,6 +570,9 @@ def process_experiment(
     result['params']['dff_window_sec']    = dff_window * frame_period
     if do_neuropil:
         result['dff_neuropil'] = dff_neuropil
+
+    # Cell-quality skewness (Step 8b) is computed later, after dff_nan exists
+    # (it must consider the photostim-blanked frames as NaN — see Step 12b).
 
     # -----------------------------------------------------------------------
     # Step 9-11 — Stimulus processing
@@ -516,7 +584,7 @@ def process_experiment(
                 'stim_on_2p_frame', 'stim_id', 'unique_stims',
                 'stim_properties', 'target_number', 'target_trial',
                 'photostim_triggers_sec',
-                'cyc', 'resp', 'resps', 'resp_err', 'stim_avg_images'):
+                'cyc', 'resp', 'resps', 'resp_err'):
         result[key] = None
 
     has_stim = stim_file > -1
@@ -537,8 +605,8 @@ def process_experiment(
     vrec_sample_rate = vrec_meta['sample_rate'] if vrec_meta else 10000
     result['vrec_sample_rate'] = vrec_sample_rate
 
-    # --- Auto-detect channel layout ---
-    ch_layout = detect_vrec_channel_layout(vrec)
+    # --- Channel layout (hardcoded NEW; warns if it looks OLD when opto) ---
+    ch_layout = detect_vrec_channel_layout(vrec, is_2p_opto=is_2p_opto)
     vis_ch  = ch_layout['visual_trigger_ch']
     opto_ch = ch_layout['photostim_ch']
     result['visual_trigger_ch'] = vis_ch
@@ -550,6 +618,13 @@ def process_experiment(
 
     if vis_ch is not None:
         stim_on_sec = vrec_channel_events[vis_ch]['onsets_sec']
+        if len(stim_on_sec) > 1:
+            diffs = np.diff(stim_on_sec)
+            median_iti = np.median(diffs)
+            if stim_on_sec[0] > 2 * median_iti:
+                print(f'[WARNING] First stim trigger gap ({stim_on_sec[0]:.2f} s) is '
+                      f'>2× median ITI ({median_iti:.2f} s) — dropping erroneous first trigger.')
+                stim_on_sec = stim_on_sec[1:]
         frame_triggers_sec = result['frame_triggers_sec']
         stim_on_2p_frame = np.array([
             np.argmin(np.abs(s - frame_triggers_sec))
@@ -558,7 +633,21 @@ def process_experiment(
         result['stim_on_2p_frame'] = stim_on_2p_frame
 
     if opto_ch is not None:
-        result['photostim_triggers_sec'] = vrec_channel_events[opto_ch]['onsets_sec']
+        # Drop the erroneous early photostim trigger (gap > 2× median ITI), same as
+        # the visual channel. Kept independent of opto_offset_trigger (PsychoPy row-drop).
+        opto_onsets_sec = vrec_channel_events[opto_ch]['onsets_sec']
+        opto_onsets     = vrec_channel_events[opto_ch]['onsets']
+        if len(opto_onsets_sec) > 1:
+            diffs = np.diff(opto_onsets_sec)
+            median_iti = np.median(diffs)
+            if opto_onsets_sec[0] > 2 * median_iti:
+                print(f'[WARNING] First photostim trigger gap ({opto_onsets_sec[0]:.2f} s) is '
+                      f'>2× median ITI ({median_iti:.2f} s) — dropping erroneous first photostim trigger.')
+                opto_onsets_sec = opto_onsets_sec[1:]
+                opto_onsets     = opto_onsets[1:]
+                vrec_channel_events[opto_ch]['onsets_sec'] = opto_onsets_sec
+                vrec_channel_events[opto_ch]['onsets']     = opto_onsets
+        result['photostim_triggers_sec'] = opto_onsets_sec
 
     # --- Read PsychoPy file whenever stim_file > -1 ---
     if stim_file > -1:
@@ -573,26 +662,25 @@ def process_experiment(
             if psychopy_data.ndim == 1:
                 psychopy_data = psychopy_data[np.newaxis, :]
 
-            # Known acquisition bug: for 2P opto experiments the trigger
-            # stream is offset by one row relative to the psychopy file.
-            # Dropping row 0 realigns triggers → psychopy rows.
-            if is_2p_opto and opto_offset_trigger:
-                print(f'[opto_offset_trigger=True] Dropping first PsychoPy row '
-                      f'({psychopy_data.shape[0]} → {psychopy_data.shape[0] - 1} rows).')
-                psychopy_data = psychopy_data[1:]
-
             if not is_2p_opto:
                 stim_id         = psychopy_data[:, 0]
                 stim_properties = psychopy_data[:, 1:]
                 result['stim_properties'] = stim_properties
             else:
-                # 2P opto: columns are [target_number, target_trial, (stim_id), ...]
+                # 2P opto: columns are [target_number, target_trial, (vis_stim_id), ...]
+                # Known acquisition bug: photostim trigger stream is offset by one row.
+                # Apply the row-drop only to the photostim columns (0, 1); the visual
+                # stim column (2) is aligned with vis triggers and must NOT be shifted.
+                opto_data = psychopy_data[1:] if opto_offset_trigger else psychopy_data
+                if opto_offset_trigger:
+                    print(f'[opto_offset_trigger=True] Dropping first PsychoPy row for '
+                          f'photostim columns ({psychopy_data.shape[0]} → {opto_data.shape[0]} rows).')
+                result['target_number'] = opto_data[:, 0]
+                result['target_trial']  = opto_data[:, 1]
                 if psychopy_data.shape[1] >= 3:
                     stim_id = psychopy_data[:, 2]
                 else:
-                    stim_id = psychopy_data[:, 0]
-                result['target_number'] = psychopy_data[:, 0]
-                result['target_trial']  = psychopy_data[:, 1]
+                    stim_id = opto_data[:, 0]
                 if psychopy_data.shape[1] > 3:
                     result['stim_properties'] = psychopy_data[:, 3:]
 
@@ -604,10 +692,36 @@ def process_experiment(
             if result.get('stim_on_2p_frame') is not None:
                 stim_on_2p = result['stim_on_2p_frame']
                 if len(stim_on_2p) != len(stim_id):
+                    n_use = min(len(stim_on_2p), len(stim_id))
                     print(f'[WARNING] Stim trigger mismatch: '
-                          f'{len(stim_on_2p)} detected vs {len(stim_id)} in stim file!')
+                          f'{len(stim_on_2p)} detected vs {len(stim_id)} in stim file '
+                          f'— using first {n_use} of each.')
+                    result['stim_on_2p_frame'] = stim_on_2p[:n_use]
+                    result['stim_id']          = stim_id[:n_use]
+                    result['unique_stims']     = np.unique(stim_id[:n_use])
                 else:
                     print(f'Stim triggers: {len(stim_on_2p)} ✓')
+
+    # -----------------------------------------------------------------------
+    # Step 10b — Pre-blank dff for opto experiments before building cyc
+    # NaN-blank dff_nan now (before Step 11) so gen_stim_cyc uses clean traces.
+    # -----------------------------------------------------------------------
+    result['dff_nan'] = None
+    if is_2p_opto and result.get('photostim_triggers_sec') is not None and opto_blank_sec is not None:
+        opto_blank_frames = int(round(opto_blank_sec / frame_period))
+        _fudge = 1
+        photostim_2p_frame_early = np.array([
+            np.argmin(np.abs(ps - result['frame_triggers_sec']))
+            for ps in result['photostim_triggers_sec']
+        ], dtype=int)
+        dff_nan = result['dff'].copy()
+        print(f'NaN-blanking dff_nan at {len(photostim_2p_frame_early)} opto pulse '
+              f'windows ({opto_blank_frames + 2 * _fudge} frames each)...')
+        for _f0 in photostim_2p_frame_early:
+            _start = max(0, int(_f0) - _fudge)
+            _end   = min(dff_nan.shape[0], int(_f0) + opto_blank_frames + _fudge + 1)
+            dff_nan[_start:_end, :] = np.nan
+        result['dff_nan'] = dff_nan
 
     # -----------------------------------------------------------------------
     # Step 11 — Response analysis (stimulus present, not spontaneous)
@@ -623,7 +737,7 @@ def process_experiment(
         if do_neuropil:
             neuropil_subtraction(outfile=outfile, roi_list=roi_list)
 
-        gen_stim_cyc(outfile=outfile, pre=0, slag=0, dur_resp=dur_resp)
+        gen_stim_cyc(outfile=outfile, pre=pre_resp, slag=0, dur_resp=dur_resp)
 
         unique_stims = result['unique_stims']
         n_stims      = len(unique_stims)
@@ -647,26 +761,6 @@ def process_experiment(
         else:
             print('Too few trials per stimulus — skipping peak response computation.')
 
-        # Per-stimulus average images (~30 frames post onset)
-        n_avg_frames  = int(round(1.0 / frame_period))   # ~1 second
-        stim_on_2p    = result['stim_on_2p_frame'].astype(int)
-        stim_id_arr   = result['stim_id']
-        stim_avg_imgs = np.zeros((n_stims, size_x, size_y))
-
-        for si, sv in enumerate(tqdm(unique_stims,
-                                      desc='Stim avg images', ncols=75)):
-            trials = np.where(stim_id_arr == sv)[0]
-            acc, cnt = np.zeros((size_x, size_y)), 0
-            for ti in trials:
-                onset = stim_on_2p[ti]
-                if onset + n_avg_frames <= num_frames:
-                    acc += np.mean(h[dat_name][onset:onset + n_avg_frames],
-                                   axis=0)
-                    cnt += 1
-            if cnt:
-                stim_avg_imgs[si] = acc / cnt
-
-        result['stim_avg_images'] = stim_avg_imgs
         outfile.close()
 
     # -----------------------------------------------------------------------
@@ -691,6 +785,8 @@ def process_experiment(
         opto_blank_frames = int(round(opto_blank_sec / frame_period))
         opto_pre_frames   = int(round(opto_pre_sec   / frame_period))
         opto_post_frames  = int(round(opto_post_sec  / frame_period))
+        print(f'opto_blank_frames: {opto_blank_frames} '
+              f'({opto_blank_sec * 1000:.1f} ms at {1/frame_period:.1f} Hz)')
 
         result['params'].update({
             'opto_blank_sec':    opto_blank_sec,
@@ -699,25 +795,33 @@ def process_experiment(
             'opto_pre_frames':   opto_pre_frames,
         })
 
-        # stim_id is populated whenever stim_file > -1 (see PsychoPy read above)
-        opto_stim_id = result.get('stim_id')
-        if opto_stim_id is None:
-            print(f'[WARNING] No stim_id available (stim_file=-1?) — '
-                  f'treating all {len(photostim_triggers)} triggers as stim_id=0.')
-            opto_stim_id = np.zeros(len(photostim_triggers))
-        elif len(opto_stim_id) != len(photostim_triggers):
-            n_use = min(len(opto_stim_id), len(photostim_triggers))
-            print(f'[WARNING] stim_id count ({len(opto_stim_id)}) != photostim trigger count '
+        # dff_nan already computed in Step 10b (before gen_stim_cyc) so that
+        # cyc uses NaN-blanked traces. Reuse it here for downstream opto analyses.
+        dff_nan = result['dff_nan']
+
+        # Group delta images by photostim group = target_number (PsychoPy col 0),
+        # averaging over the other stim dimensions. Populated whenever stim_file > -1.
+        opto_group_id = result.get('target_number')
+        if opto_group_id is None:
+            opto_group_id = result.get('stim_id')
+        if opto_group_id is None:
+            print(f'[WARNING] No target_number/stim_id available (stim_file=-1?) — '
+                  f'treating all {len(photostim_triggers)} triggers as group=0.')
+            opto_group_id = np.zeros(len(photostim_triggers))
+        elif len(opto_group_id) != len(photostim_triggers):
+            n_use = min(len(opto_group_id), len(photostim_triggers))
+            print(f'[WARNING] group count ({len(opto_group_id)}) != photostim trigger count '
                   f'({len(photostim_triggers)}) — using first {n_use} of each. '
                   f'Check trigger detection distance parameter.')
-            opto_stim_id       = opto_stim_id[:n_use]
+            opto_group_id      = opto_group_id[:n_use]
             photostim_triggers = photostim_triggers[:n_use]
             photostim_2p_frame = photostim_2p_frame[:n_use]
 
-        opto_unique_ids = np.unique(opto_stim_id)
+        opto_unique_ids = np.unique(opto_group_id)
         n_opto_ids      = len(opto_unique_ids)
+        result['opto_unique_ids'] = opto_unique_ids
 
-        # Baseline: mean of frames at seconds 1–5 of the recording
+        # Baseline: mean of frames at recording seconds 1–5
         print('Computing opto baseline (recording seconds 1–5)...')
         bl_start = int(round(1.0 / frame_period))
         bl_end   = int(round(5.0 / frame_period))
@@ -729,7 +833,7 @@ def process_experiment(
 
         for oi, sid in enumerate(tqdm(opto_unique_ids,
                                        desc='Opto delta images', ncols=75)):
-            events   = np.where(opto_stim_id == sid)[0]
+            events   = np.where(opto_group_id == sid)[0][:5]
             post_acc = np.zeros((size_x, size_y))
             cnt      = 0
             for ev in events:
@@ -751,11 +855,14 @@ def process_experiment(
             )
         result['opto_delta_images'] = opto_delta_imgs
 
-        # ── per-trial delta images: one image per trigger, chronological ─────
-        print('Computing per-trial opto delta images...')
-        n_triggers = len(photostim_2p_frame)
+        # ── per-trial delta images: first 5 trials per group only ────────────
+        # (early seconds-1–5 baseline is most valid for the earliest photostims)
+        print('Computing per-trial opto delta images (first 5 trials/group)...')
+        keep_events = np.sort(np.concatenate([
+            np.where(opto_group_id == sid)[0][:5] for sid in opto_unique_ids
+        ])) if len(opto_unique_ids) else np.array([], dtype=int)
         trial_delta_list = []
-        for ti in range(n_triggers):
+        for ti in keep_events:
             f0         = int(photostim_2p_frame[ti])
             post_start = f0 + opto_blank_frames
             post_stop  = f0 + opto_blank_frames + opto_post_frames
@@ -773,10 +880,10 @@ def process_experiment(
         # ── cyc_photostim_only: (n_cells, n_groups, max_trials) ─────────────
         # Per-trial, per-cell dF/F response = mean(post-blank) - mean(pre)
         print('Computing cyc_photostim_only (cells × groups × trials)...')
-        dff_arr = result['dff']   # (n_frames, n_cells)
+        dff_arr = result['dff_nan']   # (n_frames, n_cells) — NaN-blanked during opto pulses
         trial_resps = []
         for sid in opto_unique_ids:
-            events = np.where(opto_stim_id == sid)[0]
+            events = np.where(opto_group_id == sid)[0]
             group_trials = []
             for ev in events:
                 f0         = int(photostim_2p_frame[ev])
@@ -785,8 +892,8 @@ def process_experiment(
                 post_stop  = f0 + opto_blank_frames + opto_post_frames
                 if pre_start < 0 or post_stop > num_frames:
                     continue
-                baseline = np.mean(dff_arr[pre_start:f0], axis=0)
-                response = np.mean(dff_arr[post_start:post_stop], axis=0)
+                baseline = np.nanmean(dff_arr[pre_start:f0], axis=0)
+                response = np.nanmean(dff_arr[post_start:post_stop], axis=0)
                 group_trials.append(response - baseline)
             trial_resps.append(group_trials)
 
@@ -801,6 +908,26 @@ def process_experiment(
     # Close H5 movie
     # -----------------------------------------------------------------------
     h.close()
+
+    # -----------------------------------------------------------------------
+    # Step 12b — Cell quality: skewness of dF/F
+    # -----------------------------------------------------------------------
+    # Use dff_nan (photostim windows blanked to NaN) when available so the
+    # blanking artefacts don't skew the metric; fall back to dff otherwise.
+    # Photostim blanking / baseline divide-by-~0 can also leave inf/NaN in dff,
+    # and scipy.stats.skew propagates any non-finite value to the whole cell
+    # (→ NaN ≥ threshold is False, failing every cell). Mask non-finite samples
+    # to NaN and omit them so the remaining good frames still count.
+    dff_quality = result['dff_nan'] if result.get('dff_nan') is not None else dff
+    dff_finite  = np.where(np.isfinite(dff_quality), dff_quality, np.nan)
+    dff_skewness = skew(dff_finite, axis=0, nan_policy='omit')   # (n_cells,)
+    dff_skewness = np.asarray(dff_skewness, dtype=float)
+    is_good_cell = dff_skewness >= skewness_threshold            # (n_cells,) bool
+    result['dff_skewness'] = dff_skewness
+    result['is_good_cell'] = is_good_cell
+    result['params']['skewness_threshold'] = skewness_threshold
+    print(f'Skewness threshold {skewness_threshold:.2f}: '
+          f'{is_good_cell.sum()}/{num_cells} cells classified as good.')
 
     # -----------------------------------------------------------------------
     # Step 13 — Save result dict to H5
@@ -855,35 +982,46 @@ def _detect_vrec_events(vrec, vrec_sample_rate, vis_ch, opto_ch):
         sig = decimate(vrec[:, col].astype(float), downsample, zero_phase=True)
         sig[:int(ds_rate)] = 0   # blank first second to suppress onset artifacts
         sig[sig < 0] = 0
-        if sig.max() == 0:
+        if sig.max() <= 0:
             events[col] = {'onsets': np.array([], dtype=int),
                            'onsets_sec': np.array([], dtype=float)}
             continue
-        sig_diff = np.diff(sig)
-        if sig_diff.max() <= 0:
-            onsets = np.array([], dtype=int)
-        elif col == vis_ch or col == opto_ch:
-            onsets, _ = find_peaks(sig_diff, distance=500,
-                                   height=(sig_diff.max() * 0.1))
+        # Binarize at half-max and take low→high transitions (rising edges only).
+        # Immune to anti-aliasing ringing at pulse offsets, which the derivative
+        # method mis-detected as a second event per pulse.
+        binary  = (sig > sig.max() * 0.5).astype(int)
+        rising  = np.where(np.diff(binary) == 1)[0] + 1
+        # Enforce a minimum gap (refractory) to drop noise-induced double crossings.
+        min_gap = 500   # samples at ds_rate (0.5 s) — same as old `distance`
+        if len(rising):
+            kept = [rising[0]]
+            for r in rising[1:]:
+                if r - kept[-1] >= min_gap:
+                    kept.append(r)
+            onsets = np.array(kept, dtype=int)
         else:
-            onsets, _ = find_peaks(sig_diff, distance=500,
-                                   height=(sig_diff.max() * 0.5))
+            onsets = np.array([], dtype=int)
         events[col] = {'onsets': onsets * downsample,   # 10 kHz-equivalent indices
                        'onsets_sec': onsets / ds_rate}
     return events
 
 
-def detect_vrec_channel_layout(vrec, threshold=1.0):
+def detect_vrec_channel_layout(vrec, threshold=1.0, is_2p_opto=False):
     """
     Determine which vrec columns carry visual and photostimulation triggers.
 
     The vrec array columns are: [Time(ms), Input0, Input1, Input2, ...]
     Data channels start at column index 1.
 
-    Fixed channel assignment (hardware convention):
+    Fixed channel assignment (NEW layout — hardware convention, hardcoded):
       Input 0 (col 1) — reserved / other signals, ignored for trigger detection
-      Input 1 (col 2) — visual stimulus trigger (always)
-      Input 2+ (col 3+) — photostim trigger (first active channel found)
+      Input 1 (col 2) — visual stimulus trigger
+      Input 2  (col 3) — photostim trigger
+
+    NOTE: this does NOT auto-detect. The channel assignment is hardcoded to the
+    NEW layout. Some OLD recordings instead use vis=col1/opto=col2; for those,
+    hardcode vis_ch/opto_ch below. When is_2p_opto=True a heuristic warns if the
+    event counts look like an OLD-layout recording (see below).
 
     Triggers are positive-going pulses. Rising-edge detection (diff) is used
     for visual stim; direct peak detection is used for photostim.
@@ -900,15 +1038,21 @@ def detect_vrec_channel_layout(vrec, threshold=1.0):
     names  = {c: f'Input{c - 1}' for c in range(1, n_cols)}
 
     def _n_events(col_idx):
-        """Count positive-going rising-edge events on a channel (downsampled 10×)."""
+        """Count rising-edge events on a channel (downsampled 10×)."""
         sig = decimate(vrec[:, col_idx].astype(float), 10, zero_phase=True)
         sig[:1000] = 0   # blank first second
         sig[sig < 0] = 0
-        sig_diff = np.diff(sig)
-        if sig_diff.max() <= 0:
+        if sig.max() <= 0:
             return 0
-        evts, _ = find_peaks(sig_diff, distance=500, height=sig_diff.max() * 0.1)
-        return len(evts)
+        binary = (sig > sig.max() * 0.5).astype(int)
+        rising = np.where(np.diff(binary) == 1)[0] + 1
+        if len(rising) == 0:
+            return 0
+        kept = [rising[0]]
+        for r in rising[1:]:
+            if r - kept[-1] >= 500:
+                kept.append(r)
+        return len(kept)
 
     # Count events on all data channels for diagnostic printout
     event_counts = {c: _n_events(c) for c in range(1, n_cols)}
@@ -932,6 +1076,29 @@ def detect_vrec_channel_layout(vrec, threshold=1.0):
           f'(vis=col{vis_ch}/{names.get(vis_ch, "?")} '
           f'[Input 1 — fixed], '
           f'opto=col{opto_ch}/{names.get(opto_ch, "none")})')
+
+    # OLD-layout sanity check (opto only). The NEW layout is hardcoded above:
+    # vis=col2, opto=col3. OLD recordings use vis=col1, opto=col2. We can't tell
+    # which without metadata, but the photostim train is the giveaway: in NEW data
+    # it lives on col3; if col3 is (near-)silent while col2 carries far more events
+    # than the chosen visual channel would, the photostim is probably on col2 and
+    # this is an OLD-layout session. Compare channels against each other so there
+    # is no fixed magic threshold.
+    if is_2p_opto:
+        ev_col1 = event_counts.get(1, 0)   # OLD vis
+        ev_col2 = event_counts.get(2, 0)   # NEW vis  / OLD opto
+        ev_col3 = event_counts.get(3, 0)   # NEW opto
+        # Suspected OLD if the hardcoded photostim channel (col3) has essentially
+        # no events while col2 does, and col1 also carries a visual-like train.
+        old_opto_silent = ev_col3 <= max(1, 0.1 * ev_col2)
+        old_has_two_trains = ev_col1 > 0 and ev_col2 > 0
+        if old_opto_silent and old_has_two_trains:
+            print('[WARNING] vrec layout may be OLD (vis=col1/opto=col2): '
+                  f'col1={ev_col1}, col2={ev_col2}, col3={ev_col3} events — the '
+                  'hardcoded photostim channel (col3) is (near-)silent. '
+                  'If this is an old recording, hardcode vis_ch=1 / opto_ch=2 in '
+                  'detect_vrec_channel_layout() (bruker_pipeline.py, "Visual stim '
+                  'is always Input 1" / "Photostim: hardcoded" lines).')
 
     return {'visual_trigger_ch': vis_ch, 'photostim_ch': opto_ch, 'layout': layout}
 
@@ -1066,6 +1233,69 @@ def print_experiment_summary(result):
 # ===========================================================================
 # Visualization
 # ===========================================================================
+
+def plot_stim_response(result, n_cells=15, frame_period=0.033, save_path=None):
+    """
+    Figure 3 — stimulus-response summary for the first n_cells ROIs.
+
+    Each row is one cell with two panels:
+      Left  : trial-averaged dF/F trace per stimulus ID
+      Right : bar chart of peak response per stimulus ID
+    """
+    cyc          = result.get('cyc')           # (n_rois, n_stims, n_trials, n_frames)
+    resp         = result.get('resp')          # (n_rois, n_stims)
+    unique_stims = result.get('unique_stims')  # (n_stims,)
+
+    if cyc is None or resp is None or unique_stims is None:
+        print('[plot_stim_response] Missing cyc/resp/unique_stims — skipping.')
+        return
+
+    n_show   = min(n_cells, cyc.shape[0])
+    n_stims  = len(unique_stims)
+    t_axis   = np.arange(cyc.shape[-1]) * frame_period
+
+    fig, axes = plt.subplots(n_show, 2, figsize=(10, 2.5 * n_show),
+                             squeeze=False)
+    cmap = plt.get_cmap('tab10', n_stims)
+
+    for i in range(n_show):
+        ax_t = axes[i, 0]
+        ax_b = axes[i, 1]
+
+        for s in range(n_stims):
+            mean_trace = np.nanmean(cyc[i, s, :, :], axis=0)
+            ax_t.plot(t_axis, mean_trace, color=cmap(s),
+                      label=f'{int(unique_stims[s])}', linewidth=1.0)
+
+        ax_t.axhline(0, color='k', linewidth=0.5, linestyle='--')
+        ax_t.set_ylabel(f'cell {i}', fontsize=8)
+        ax_t.tick_params(labelsize=7)
+        if i == 0:
+            ax_t.set_title('Trial-avg dF/F', fontsize=9)
+            ax_t.legend(title='stim', fontsize=6, title_fontsize=6,
+                        loc='upper right', ncol=max(1, n_stims // 4))
+
+        peak_vals = resp[i, :]
+        bar_colors = [cmap(s) for s in range(n_stims)]
+        ax_b.bar(range(n_stims), peak_vals, color=bar_colors, width=0.6)
+        ax_b.axhline(0, color='k', linewidth=0.5, linestyle='--')
+        ax_b.set_xticks(range(n_stims))
+        ax_b.set_xticklabels([str(int(s)) for s in unique_stims], fontsize=7)
+        ax_b.tick_params(labelsize=7)
+        if i == 0:
+            ax_b.set_title('Peak response', fontsize=9)
+
+    axes[-1, 0].set_xlabel('Time (s)', fontsize=8)
+    axes[-1, 1].set_xlabel('Stimulus ID', fontsize=8)
+    fig.suptitle(f'Stimulus responses — first {n_show} cells', fontsize=10, y=1.001)
+    plt.tight_layout()
+
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f'Stimulus response figure saved: {save_path}')
+
+    return fig
+
 
 def plot_experiment_summary(result, save_path=None):
     """
@@ -1261,8 +1491,9 @@ def plot_opto_images(result, save_path=None):
     One subplot per entry in opto_delta_images. Shared red–blue colorscale,
     0 % = white.
     """
-    opto_delta    = result.get('opto_delta_images')
-    experiment_id = result.get('info', {}).get('experiment_id', '')
+    opto_delta      = result.get('opto_delta_images')
+    opto_unique_ids = result.get('opto_unique_ids')
+    experiment_id   = result.get('info', {}).get('experiment_id', '')
 
     if opto_delta is None or len(opto_delta) == 0:
         print('[plot_opto_images] No opto delta images to plot.')
@@ -1288,7 +1519,8 @@ def plot_opto_images(result, save_path=None):
         im  = ax.imshow(opto_delta[oi], cmap='bwr',
                         vmin=-vlim, vmax=vlim,
                         interpolation='nearest')
-        ax.set_title(f'Group {oi + 1}', fontsize=10)
+        sid_label = int(opto_unique_ids[oi]) if opto_unique_ids is not None else oi + 1
+        ax.set_title(f'Group {sid_label}', fontsize=10)
         ax.axis('off')
 
     # Hide unused axes
@@ -1609,7 +1841,8 @@ def _populate_outfile(outfile, result, num_frames):
     outfile.create_dataset('frame_period',     data=np.array([fp]))
     outfile.create_dataset('do_cascade',       data=np.array([False]))
     outfile.create_dataset('stim_file',        data=result.get('params', {}).get('stim_file_num', -1))
-    outfile.create_dataset('dff',              data=result['dff'])
+    dff_for_cyc = result['dff_nan'] if result.get('dff_nan') is not None else result['dff']
+    outfile.create_dataset('dff',              data=dff_for_cyc)
     outfile.create_dataset('is_dendrite',      data=result['is_dendrite'])
     outfile.create_dataset('is_spine',         data=result['is_spine'])
     outfile.create_dataset('is_soma',          data=result['is_soma'])

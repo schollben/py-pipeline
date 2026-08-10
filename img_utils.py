@@ -245,12 +245,16 @@ def gen_stim_cyc(outfile, pre=0, slag=0, dur_resp=2.5):
     stim_on_2p_frame = outfile['stim_on_2p_frame'][:]
     stim_id = outfile['stim_id'][:]
     dff = outfile['dff'][:]
-    n_trials = int(np.floor(len(outfile['stim_id']) / len(outfile['unique_stims'])))
+    n_trials = int(max(np.sum(stim_id == s) for s in unique_stims))
     stim_dur = int(np.round(dur_resp / frame_period))
     cyc_pre  = int(np.round(pre     / frame_period))
     cyc_slag = int(np.round(slag   / frame_period))
-    cyc         = np.zeros((num_cells, len(unique_stims), n_trials, stim_dur + pre))
-    cyc_spk_inf = np.zeros((num_cells, len(unique_stims), n_trials, stim_dur + pre))
+    # NaN-pad (not zero-pad): stims presented fewer than n_trials times leave
+    # trailing trial slots empty; NaN keeps them out of the downstream
+    # nanmean/nanstd (compf1wdev) instead of biasing resp/resp_err toward 0.
+    # Width uses cyc_pre (frames), matching the tt slice length below.
+    cyc         = np.full((num_cells, len(unique_stims), n_trials, stim_dur + cyc_pre), np.nan)
+    cyc_spk_inf = np.full((num_cells, len(unique_stims), n_trials, stim_dur + cyc_pre), np.nan)
     for cc in tqdm(range(num_cells), desc='Generating stimulus cycles...'):
         #print(f'cell-iter {cc}')
         trial_list = np.zeros(len(unique_stims))
@@ -267,8 +271,11 @@ def gen_stim_cyc(outfile, pre=0, slag=0, dur_resp=2.5):
                     if outfile['do_cascade'][0]:
                         s = outfile['spike_inference'][tt,cc]
                 else:
-                    f = np.full(stim_dur + pre, np.nan)
-                    s = np.full(stim_dur + pre, np.nan)
+                    f = np.full(stim_dur + cyc_pre, np.nan)
+                    s = np.full(stim_dur + cyc_pre, np.nan)
+                if int(trial_list[ind]) >= n_trials:
+                    trial_list[ind] += 1
+                    continue
                 cyc[cc, ind, int(trial_list[ind]), :] = f
                 if outfile['do_cascade'][0]:
                     cyc_spk_inf[cc, ind, int(trial_list[ind]), :] = s
@@ -383,7 +390,7 @@ def compute_peak_resp(data):
     for ii in range(data.shape[0]):
         # No queeze for python
         data2 = data[ii,:,:]
-        temp_f1, temp_f1s, temp_dc, temp_dcs, _ = compf1wdev(data2)
+        temp_f1, temp_f1s, temp_dc, temp_dcs, _, _ = compf1wdev(data2)
         resp[ii] = temp_f1 + temp_dc
         resps[ii,:] = temp_f1s + temp_dcs
         resperr[ii] = np.nanstd(temp_f1s + temp_dcs) / np.sqrt(data.shape[1])
@@ -414,7 +421,7 @@ def compf1wdev(data):
         # Use nanmean to handle NaN values in the data
         ff = np.fft.fft(np.nanmean(data, axis=0))
     
-    dc = ff[0] / m
+    dc = (ff[0] / m).real
     f1 = 2 * abs(ff[1] / m)
     f2 = 2 * abs(ff[2] / m)
     angf1 = np.angle(ff[1])
@@ -435,7 +442,7 @@ def compf1wdev(data):
         ff = np.fft.fft(data[j, :])
         singleangle = np.angle(ff[1])
         indf1amp[j] = np.cos(singleangle - angf1) * abs(ff[1] * 2 / m)
-        inddcamp[j] = ff[0] / m
+        inddcamp[j] = (ff[0] / m).real
         
         singleangle = np.angle(ff[2])
         indf2amp[j] = np.cos(singleangle - angf2) * abs(ff[2] * 2 / m)
@@ -456,6 +463,11 @@ def read_xml_file(fname):
         fname (str): String indicating path to read XML data from.
     Returns:
         rec_info (np.array): Array containing relative frame timing information.
+
+    Raises:
+        FileNotFoundError / ValueError: if the XML cannot be read or parsed.
+            Fails loud rather than returning None, so callers get a clear error
+            instead of a downstream 'NoneType' crash.
     '''
     try:
         tree = ET.parse(fname)
@@ -463,13 +475,11 @@ def read_xml_file(fname):
         # Count the number, then get the values
         rel_frametimes = [child.attrib['relativeTime'] for child in root[2] if child.tag == 'Frame']
         return np.array(rel_frametimes).astype('float')
-    
+
     except FileNotFoundError:
-        print(f'File {fname} was not found.')
-    except ET.ParseError:
-        print(f'Error parsing XML file {fname}')
-    except Exception as e:
-        print('Exception during read_xml_file: ', e)
+        raise FileNotFoundError(f'TSeries XML not found: {fname}')
+    except ET.ParseError as e:
+        raise ValueError(f'Failed to parse TSeries XML {fname}: {e}') from e
 
 def get_target_folders_v2(loc, date, fnames, filetype='TSeries'):
     '''

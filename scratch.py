@@ -2,10 +2,9 @@
 
 import h5py
 import os
-# os.chdir(r'/mnt/bigdata/PROCESSED')
-os.chdir(r'/Users/benjaminscholl/Dropbox/projects/2poptostim/mouseSCexamples/')
+os.chdir(r'/mnt/bigdata/PROCESSED')
 
-with h5py.File('TSeries-05062026-1341-003.h5', 'r') as f:
+with h5py.File('TSeries-07132025-1042-002.h5', 'r') as f:
     def print_structure(name, obj):
         if isinstance(obj, h5py.Dataset):
             print(f"Dataset: {name} Shape: {obj.shape} Dtype: {obj.dtype}")
@@ -13,9 +12,9 @@ with h5py.File('TSeries-05062026-1341-003.h5', 'r') as f:
             print(f"Group: {name}")
     
     f.visititems(print_structure)
+    
 
-
-#%% load FOV and example traces
+#%% load 
 import h5py
 import os
 os.chdir(r'/mnt/bigdata/PROCESSED')

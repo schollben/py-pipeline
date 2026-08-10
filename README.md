@@ -94,6 +94,13 @@ result = process_experiment(
 
 `process_experiment` returns a dict containing all processed variables (traces, trial matrices, opto images, etc.).
 
+For 2P opto experiments the result dict contains two dF/F arrays:
+- `result['dff']` — original dF/F, unmodified (no NaN values)
+- `result['dff_nan']` — copy of dff with NaN inserted at opto pulse windows (± 1 frame fudge around each blanked period); used by downstream opto analyses (`cyc_photostim_only`, plots)
+
+MarkPoints group metadata is stored under `result['Bruker_Acq']`:
+- `result['Bruker_Acq']['markpoints_group_info']` — `(n_conditions, 4)` float array. One row per XML MarkPoints Group (condition). Columns: `[condition_idx, unique_group_id, n_targets, dispersion_um]`. Conditions whose target coordinates are 100% overlapping (e.g. an 80 mW group paired with a 0 mW sham) share the same `unique_group_id`. `dispersion_um` is the std of pairwise distances between target centres in µm (0 for a single-target group).
+
 ---
 
 ## File Overview

@@ -5,23 +5,22 @@ sys.path.insert(0, os.path.dirname(__file__))
 from bruker_pipeline import process_experiment
 
 # Set parameters for the experiment to process
-DATE            = '06042026'    # acquisition date, format MMDDYYYY
-FILE_NUM        = 3             # TSeries number (e.g. 3 → matches folder ending in -003)
-STIM_FILE       = -1            # PsychoPy file, Set to -1 if there is no stimulus file.
+DATE            = '07132025'    # acquisition date, format MMDDYYYY
+FILE_NUM        = 3            # TSeries number (e.g. 3 → matches folder ending in -003)
+STIM_FILE       = 2            # PsychoPy file, Set to -1 if there is no stimulus file.
 USE_INFERENCE   = True         # True  → use inference.h5
-DUR_RESP        = 1             # Response window duration in seconds to build the trial-averaged response matrix (cyc)
+DUR_RESP        = 2             # Response window duration in seconds to build the trial-averaged response matrix (cyc)
+PRE_RESP        = 1             # Pre-stimulus window duration in seconds prepended to each cyc trial (0 = no pre)
 
 IS_2P_OPTO      = True          # True  → experiment includes 2-photon photostimulation (optogenetics), Will read MarkPoints XML and compute opto % change images
-OPTO_POST_SEC   = 0.2           # seconds after the blanking window to average (response)
+OPTO_POST_SEC   = 1             # seconds after the blanking window to average (response)
 OPTO_PRE_SEC    = 0.5           # seconds before trigger onset to average (baseline)
 
 DO_PLOT         = True          # True → generate and save a summary figure (ROIs, MarkPoints, opto images).
 
-# Known acquisition bug: photostim trigger stream is offset by 1 row relative
+# opto_offset_trigger known acquisition bug: photostim trigger stream is offset by 1 row relative
 # to the PsychoPy file. Keep True until the bug is fixed in the acquisition software.
-OPTO_OFFSET     = True
-
-# Run the processing pipeline with the specified parameters 
+# Run the processing pipeline with the specified parameters
 if __name__ == '__main__':
     result = process_experiment(
         date                 = DATE,
@@ -31,10 +30,13 @@ if __name__ == '__main__':
         use_inference        = USE_INFERENCE,
         do_neuropil          = False,
         dur_resp             = DUR_RESP,
+        pre_resp             = PRE_RESP,
         opto_post_sec        = OPTO_POST_SEC,
         opto_pre_sec         = OPTO_PRE_SEC,
         do_plot              = DO_PLOT,
         do_vrec_diagnostic   = False,
-        opto_offset_trigger  = OPTO_OFFSET,
+        opto_offset_trigger  = True,
+        skewness_threshold   = 1,
+        n_plot_cells         = 15,
     )
     
