@@ -66,20 +66,26 @@ def plot_tuning_curves(s, cells=None):
     top_ids, top_dirs = top_ids[order], top_dirs[order]
 
     for ax, cc in zip(axes, cells):
+        
         resp, err = resp_grid(s, cc)
+        
         for ci in range(len(cons)):
             ax.errorbar(dirs, resp[:, ci], yerr=err[:, ci], color=shades[ci],
                         lw=1, marker='o', ms=2, capsize=0)
+        
         fit = fit_direction_tuning(top_dirs, s.resps[cc, top_ids])
+        
         if fit['success']:
             # ax.plot(fine, double_gaussian(fine, *fit['params']),
             #         color='crimson', lw=1)
             ax.axvline(fit['pref_dir'], color='crimson', ls='--', lw=1)
             pref_dir[cc] = fit['pref_dir']
             fit_params[cc] = fit['params']
+        
         ax.set_title(f'cell {cc}', fontsize=8)
         ax.set_xticks([0, 180, 360])
         ax.tick_params(labelsize=6)
+        
     for ax in axes[len(cells):]:
         ax.axis('off')
     sns.despine(fig=fig)
