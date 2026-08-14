@@ -9,7 +9,8 @@ import seaborn as sns
 from analysis import (load_session, compute_responses, plot_avg_rois, plot_stim_traces,
                       plot_tuning_curves, compute_selectivity, plot_preference_maps,
                       describe_photostim_groups, plot_photostim_group_heatmaps,
-                      compute_influence, plot_influence_maps, plot_influence_by_contrast)
+                      plot_photostim_target_traces, compute_influence,
+                      plot_influence_maps, plot_influence_by_contrast)
 
 sns.set_theme(context='notebook', style='white')
 
@@ -35,7 +36,11 @@ plot_avg_rois(dat,vmax_frac=0.6)
 # %% 2. trial-averaged time-varying responses (one or more cells)
 # window=(t0,t1) sec relative to onset; baseline_subtract removes the dF/F offset;
 # n=<count> above each stim shows the trials in that average.
-plot_stim_traces(dat, [10,15,20,25,30,35,40,45,50], window=(-2, 2), baseline_subtract=True);
+plot_stim_traces(dat, [1,5,10,15,20], 
+                 window=(-2,5), 
+                 mask_artifact=True, 
+                 baseline_subtract=True, 
+                 trials='sham');
 
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit)
@@ -52,7 +57,12 @@ plot_preference_maps(dat, thr=0.1);
 
 # %% 6. photostimulation group dF/F activity
 describe_photostim_groups(dat)
+
 plot_photostim_group_heatmaps(dat, mode='zscore');
+
+
+# %% 6b. targeted-ROI timecourses (real vs sham), rows=groups, cols=targets
+plot_photostim_target_traces(dat, window=(-1, 2));
 
 
 # %% 7. influence maps (photostim vs sham)

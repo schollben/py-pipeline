@@ -32,7 +32,7 @@ def compute_responses(s, baseline_guard_sec=0.5, post_sec=1.0):
     return resp
 
 
-def plot_stim_traces(s, cells, gap=10, mask_artifact=True, window=None,
+def plot_stim_traces(s, cells, gap=20, mask_artifact=True, window=None,
                      baseline_subtract=False, trials='all'):
     """Concatenated trial-averaged cyc traces (mean +/- SEM) for each cell.
 

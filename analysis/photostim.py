@@ -1,8 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 from matplotlib.colors import TwoSlopeNorm
 
-from .session import cyc_response_windows
+from .session import cyc_response_windows, cyc_onset
 
 _TARGET_COLOR = 'purple'
 _NONTARGET_COLOR = 'gray'
@@ -308,5 +309,81 @@ def plot_influence_by_contrast(s, influence=None):
             _draw_influence_map(axes[row, col], s, grand, gmap[real_tn]['target_rois'],
                                 f'group {real_tn:g}  |  contrast {contrast:g}')
     fig.suptitle(f'{s.exp_id}  |  influence by contrast')
+    fig.tight_layout()
+    return fig
+
+
+def plot_photostim_target_traces(s, window=None):
+    """Trial-averaged cyc timecourse of each targeted ROI, real vs sham.
+
+    Grid of line plots: one row per real photostim group/ensemble, one column per
+    targeted ROI in that group. Each subplot overlays the target's real (power>0)
+    and paired sham (power=0) trial-averaged traces (mean +/- SEM), collapsed
+    across visual stims (as plot_photostim_group_heatmaps does).
+
+    window : (t0, t1) in seconds relative to visual onset to crop the displayed
+        frames; None shows the full cyc window.
+    """
+    if not s.has_photostim:
+        print(f'{s.exp_id}: no photostimulation data in this session.')
+        return
+
+    gmap = photostim_group_map(s)
+    grp = cyc_trial_group(s)
+    real_groups = sorted(gmap.keys())
+    n_frames = s.cyc.shape[3]
+    onset = cyc_onset(s)
+
+    # display frame slice from the requested time window (relative to onset)
+    if window is not None:
+        f0 = int(np.clip(onset + round(window[0] / s.frame_period), 0, n_frames))
+        f1 = int(np.clip(onset + round(window[1] / s.frame_period), f0 + 1, n_frames))
+    else:
+        f0, f1 = 0, n_frames
+    xf = np.arange(f0, f1)
+
+    n_rows = len(real_groups)
+    n_cols = max(len(gmap[tn]['target_rois']) for tn in real_groups)
+    fig, axes = plt.subplots(n_rows, n_cols, sharex=True, squeeze=False,
+                             figsize=(3 * n_cols, 2.5 * n_rows))
+
+    def mean_sem(roi, target_tn):
+        si, ti = np.where(grp == target_tn)
+        tr = s.cyc[roi, si, ti, :]                       # (n_sel, n_frames)
+        mean = np.nanmean(tr, axis=0)
+        n = max(np.sum(~np.isnan(tr[:, 0])), 1)
+        sem = np.nanstd(tr, axis=0) / np.sqrt(n)
+        return mean, sem
+
+    legended = False
+    for row, real_tn in enumerate(real_groups):
+        target_rois = gmap[real_tn]['target_rois']
+        sham_tn = gmap[real_tn]['sham']
+        for col in range(n_cols):
+            ax = axes[row, col]
+            if col >= len(target_rois):
+                ax.axis('off')
+                continue
+            roi = int(target_rois[col])
+            for tn, color, label in ((real_tn, _TARGET_COLOR, 'real'),
+                                     (sham_tn, _NONTARGET_COLOR, 'sham')):
+                mean, sem = mean_sem(roi, tn)
+                ax.plot(xf, mean[f0:f1], color=color, lw=1,
+                        label=(label if not legended else None))
+                ax.fill_between(xf, (mean - sem)[f0:f1], (mean + sem)[f0:f1],
+                                color=color, alpha=0.2, lw=0)
+            ax.axvline(onset, color='black', lw=0.8, ls='--')
+            ax.set_title(f'grp {real_tn:g} · ROI {roi}', fontsize=8)
+            if col == 0:
+                ax.set_ylabel(f'group {real_tn:g}\ndF/F', fontsize=8)
+            if not legended:
+                ax.legend(fontsize=7, frameon=False)
+                legended = True
+    for ax in axes[-1]:
+        if ax.axison:
+            ax.set_xlabel('frame (onset = dashed)', fontsize=8)
+
+    sns.despine(fig=fig)
+    fig.suptitle(f'{s.exp_id} · target-ROI timecourses (real vs sham)')
     fig.tight_layout()
     return fig
