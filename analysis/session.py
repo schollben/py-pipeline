@@ -108,6 +108,18 @@ def cyc_blank_frames(s):
     return np.where(np.all(np.isnan(s.cyc), axis=(0, 1, 2)))[0]
 
 
+def cyc_onset(s):
+    """Cyc-window frame index of visual stimulus onset.
+
+    cyc width = pre-frames + round(dur_resp / frame_period), and gen_stim_cyc
+    places onset at (pre-frames - 1). Returns 0 if dur_resp is unknown.
+    (Verified: 002 -> 14, 003 -> 29.)
+    """
+    if not s.dur_resp:
+        return 0
+    return s.cyc.shape[3] - int(round(s.dur_resp / s.frame_period)) - 1
+
+
 def cyc_response_windows(s, baseline_guard_sec=0.5, post_sec=1.0):
     """Baseline / peak frame slices within the cyc window, artifact-aware.
 
@@ -135,9 +147,12 @@ def cyc_response_windows(s, baseline_guard_sec=0.5, post_sec=1.0):
         base = slice(0, max(1, b0 - guard))
         peak = slice(b1 + 1, min(width, b1 + 1 + post))
     else:
+        # no blank -> no photostim artifact, so no guard needed: use the full
+        # pre-onset region as baseline (a 0.5s guard would eat all of it when the
+        # cyc has only ~0.5s of pre-frames).
         onset = (width - int(round(s.dur_resp / s.frame_period))
                  if s.dur_resp else guard)
-        base = slice(0, max(1, onset - guard))
+        base = slice(0, max(1, onset))
         peak = slice(onset, min(width, onset + post))
     return base, peak
 

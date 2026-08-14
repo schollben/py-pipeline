@@ -33,7 +33,9 @@ plot_avg_rois(dat,vmax_frac=0.6)
 
 
 # %% 2. trial-averaged time-varying responses (one or more cells)
-plot_stim_traces(dat, [10,20,30,40]); #example: cells 5, 50, 70
+# window=(t0,t1) sec relative to onset; baseline_subtract removes the dF/F offset;
+# n=<count> above each stim shows the trials in that average.
+plot_stim_traces(dat, [10,15,20,25,30,35,40,45,50], window=(-2, 2), baseline_subtract=True);
 
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit)
