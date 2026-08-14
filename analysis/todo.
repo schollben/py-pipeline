@@ -1,0 +1,57 @@
+Goal: build functions and 'analysis' folder and add onto cell -by-cell script called 'SimpleAnalysis'
+Specific Goals: add in analyses and plots for experiments involving holographic photostimulation
+
+1. trial-averaged activity per group. each group, grab all photostimulation trials associated with that group. compute cyc or trial-averaged activity traces for both the target cells and all other cells. then create a heatmap of cell activity. 
+rows = cells, columns = time before and after photostimulation. use the coolwarm colormap.
+we need a way to label or denote the targeted cells for each group. this could be an outline or a purple dot next to the specific row for each cell targeted in that group. 
+each group average response heatmap should be plotted as a separate subplot. 2 groups = 2 subplots, shown side by side.
+this function should have an argument to plot either (1) cell-by-cell average values (2) values normalized per cell or (3) z-scored average values
+
+2. we need a function to compute influence from the drive for a specific group of targets. this is where we need to be careful about the group IDs in markpoints and the number of unique group IDs.
+to compute influence, we will compare average responses across stimulus IDs between photostim WITH power greater than zero and with power = 0 (sham). For now we can use a simple normalized subtraction.
+that is, influence = (photostimulation_Response - sham_Response)/sham_Response. for now, use peak responses, not cyc. 
+
+once influence is collected on a per group basis, we want to visualize the organization of influence, first ignoring stimulus-specific modulations. 
+for each nontarget cell, we should compute the grand mean influence across stimulus IDs. then, using the cell masks, plot the cells and color-code them based on influence.
+use the PRGn colormap. there should be 1 2-D image map for each unique group. target cells should have a puple outline. nontarget cells should have a gray outline.  the facecolor psuedo-colored by influence value. 
+
+3. we need to expland on the point above (#2) to examine per-group influence as a function of stimulus properties. the first function should example spatial organization of influence dependent on stimulus contrast (ignorning orientation/direction).
+typically we have 3 contrasts (0, low, high). 
+
+this needs to be well organized code and simple clear functions. we will likely need to add or adapt later on. 
+ask questions to gain clarifications for planning.
+
+
+_____
+
+Cell 6 — photostim group dF/F activity (SimpleAnalysis_SingleSession.py:44-46)
+
+describe_photostim_groups(dat) — prints the group structure: for each real (power > 0) photostim group, its paired sham group (power = 0, same targeted cells), laser power, the targeted ROI indices, and the trial counts for real vs. sham. The pairing logic lives in photostim_group_map (photostim.py:9), which matches real/sham conditions by shared unique_group_id in markpoints.
+plot_photostim_group_heatmaps(dat, mode='zscore') — one heatmap subplot per real group, side by side. Rows = cells (targeted cells sorted to the top and flagged with a purple dot at the row), columns = time (frames) around photostim onset (dashed line). Uses the coolwarm colormap. mode selects raw / per-cell peak-normalized / z-scored values. It excludes the all-NaN photostim-blanking frames from the normalization stats.
+Cell 7 — influence maps (photostim vs sham) (SimpleAnalysis_SingleSession.py:49-51)
+
+compute_influence(dat) — for each group and each stimulus, computes a peak-minus-baseline response from the group-specific trial-averaged traces for both the real and sham trials, then influence = (resp_real − resp_sham) / resp_sham per cell/stim. Stores a per-group influence matrix (n_cells, n_stims) and its grand mean across stims on dat.influence.
+plot_influence_maps(dat) — one spatial map per group over the average image: nontarget cells filled (facecolor) by their grand-mean influence via the PRGn colormap with a gray outline; target cells drawn with a purple outline.
+Cell 8 — influence by contrast (SimpleAnalysis_SingleSession.py:54-55)
+
+plot_influence_by_contrast(dat) — same spatial influence maps, but a grid: rows = groups, columns = stimulus contrast, averaging influence across the stims at each contrast (ignoring orientation/direction).
+Mapping onto analysis/todo.
+Yes — it maps very cleanly. The three specific goals in the todo correspond one-to-one to the three cells:
+
+todo. item	Cell	Match
+#1 trial-averaged group activity heatmaps (rows=cells, cols=time, coolwarm, target markers, subplot per group, raw/norm/zscore modes)	
+Cell 6	✅ Fully — including the coolwarm map, purple target markers, side-by-side subplots, and the exact 3 modes requested
+#2 compute influence (photostim − sham)/sham from peak responses, careful group/sham pairing; grand-mean spatial map, PRGn, purple target outline / gray nontarget outline, facecolor by influence	
+Cell 7	✅ Fully — including the peak-not-cyc response, the group-ID/sham-pairing care the todo flagged, PRGn, and the outline color scheme
+#3 per-group influence vs. stimulus contrast (ignoring orientation/direction), typically 3 contrasts	
+Cell 8	✅ Fully — contrast-split grid
+A few notes worth flagging:
+
+The implementation went beyond the todo in one spot the todo explicitly worried about: item #2 warned "be careful about the group IDs in markpoints and the number of unique group IDs." That concern is directly addressed by photostim_group_map 
+(offset derivation, sham pairing) and the empirically-verified trial alignment documented in cyc_trial_group (photostim.py:69-94).
+
+The todo asked for target cells denoted by "an outline or a purple dot." Both plots satisfy this — heatmaps use the purple dot, spatial maps use the purple outline.
+
+The todo's closing line ("ask questions to gain clarifications for planning") suggests this was scoped as a plan-first task; the code as written already covers all three items, so it looks like the work was carried through rather than left at planning.
+So: this is a completed (or near-completed) implementation of exactly the three-item todo you started a month ago.
+

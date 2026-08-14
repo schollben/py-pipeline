@@ -13,8 +13,11 @@ from analysis import (load_session, plot_avg_rois, plot_stim_traces, plot_tuning
 
 sns.set_theme(context='notebook', style='white')
 
-# FNAME = '/mnt/bigdata/PROCESSED/TSeries-07132025-1042-002.h5'
-FNAME = '/mnt/bigdata/PROCESSED/TSeries-07132025-1042-003.h5'
+
+# TEST: 07132025, good day for oricont and photostim
+folderName = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/'
+# FNAME = '/mnt/bigdata/PROCESSED/TSeries-07132025-1042-003.h5'
+FNAME = folderName + 'TSeries-07132025-1042-003.h5'
 
 dat = load_session(FNAME)
 
@@ -38,6 +41,7 @@ print(f'gDSI median {np.nanmedian(dat.gdsi):.3f}  |  gOSI median {np.nanmedian(d
 
 # %% 5. preference maps (direction | orientation)
 plot_preference_maps(dat, thr=0.1);
+
 
 
 # %% 6. photostimulation group dF/F activity
