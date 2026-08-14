@@ -2,6 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import TwoSlopeNorm
 
+from .session import cyc_response_windows
+
 _TARGET_COLOR = 'purple'
 _NONTARGET_COLOR = 'gray'
 
@@ -184,18 +186,20 @@ def plot_photostim_group_heatmaps(s, mode='raw'):
     return fig
 
 
-def compute_influence(s, pre_sec=1.0, post_sec=0.5):
+def compute_influence(s, baseline_guard_sec=0.5, post_sec=1.0):
     """Per-group influence of photostimulation relative to its paired sham.
 
     For each real group, and each visual stim id, computes a peak response
-    (post-onset peak minus pre-onset baseline, from the trial-averaged cyc
+    (post-blank peak minus pre-artifact baseline, from the trial-averaged cyc
     trace) separately for the real group's trials and its sham's trials, then:
 
         influence[cell, stim] = (resp_real - resp_sham) / resp_sham
 
     Peak responses are recomputed per (cell, stim, group) from the group-specific
     subset of cyc trials — the pipeline's precomputed `resp` mixes all groups
-    together and cannot be used here.
+    together and cannot be used here. Baseline / peak windows come from the shared
+    `cyc_response_windows`, so the photostim dip + NaN-blank are excluded (an
+    earlier version measured the baseline across the pre-onset dip).
 
     Sets s.influence = {real_tn: {'influence': (n_cells, n_stims), 'grand': (n_cells,)}}
     and returns the same dict.
@@ -203,8 +207,7 @@ def compute_influence(s, pre_sec=1.0, post_sec=0.5):
     gmap = photostim_group_map(s)
     grp = cyc_trial_group(s)
     n_stims = len(s.unique_stims)
-    pre_frames = int(round(pre_sec / s.frame_period))
-    post_frames = int(round(post_sec / s.frame_period))
+    base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec)
 
     def group_peak_resp(target_tn):
         """(n_cells, n_stims) peak-minus-baseline response for one group."""
@@ -215,8 +218,8 @@ def compute_influence(s, pre_sec=1.0, post_sec=0.5):
                 continue
             traces = s.cyc[:, si, trial_idx, :]              # (n_cells, n_sel, n_frames)
             avg = np.nanmean(traces, axis=1)                  # (n_cells, n_frames)
-            baseline = np.nanmean(avg[:, :pre_frames], axis=1)
-            post = np.nanmax(avg[:, pre_frames:pre_frames + post_frames], axis=1)
+            baseline = np.nanmean(avg[:, base_sl], axis=1)
+            post = np.nanmax(avg[:, peak_sl], axis=1)
             resp[:, si] = post - baseline
         return resp
 

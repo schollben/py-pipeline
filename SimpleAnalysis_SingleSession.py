@@ -6,10 +6,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from analysis import (load_session, plot_avg_rois, plot_stim_traces, plot_tuning_curves,
-                      compute_selectivity, plot_preference_maps, describe_photostim_groups,
-                      plot_photostim_group_heatmaps, compute_influence, plot_influence_maps,
-                      plot_influence_by_contrast)
+from analysis import (load_session, compute_responses, plot_avg_rois, plot_stim_traces,
+                      plot_tuning_curves, compute_selectivity, plot_preference_maps,
+                      describe_photostim_groups, plot_photostim_group_heatmaps,
+                      compute_influence, plot_influence_maps, plot_influence_by_contrast)
 
 sns.set_theme(context='notebook', style='white')
 
@@ -21,6 +21,10 @@ FNAME = folderName + 'TSeries-07132025-1042-003.h5'
 
 dat = load_session(FNAME)
 
+# recompute peak-minus-baseline responses from cyc: the pipeline's FFT-based
+# resp/resps are all-NaN for opto sessions (FFT propagates the photostim blank).
+compute_responses(dat)
+
 print(f'{dat.exp_id}: {dat.n_rois} ROIs, '
       f'{len(dat.directions)} directions, {len(dat.contrasts)} contrasts')
 
@@ -29,7 +33,7 @@ plot_avg_rois(dat,vmax_frac=0.6)
 
 
 # %% 2. trial-averaged time-varying responses (one or more cells)
-plot_stim_traces(dat, [1,2,3,4,5]); #example: cells 5, 50, 70
+plot_stim_traces(dat, [10,20,30,40]); #example: cells 5, 50, 70
 
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit)
