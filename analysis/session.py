@@ -162,6 +162,10 @@ def rebuild_cyc(s, pre=1.5, post=2.5, blank=None):
     fp = s.frame_period
     cyc_pre = int(round(pre / fp))
     stim_dur = int(round(post / fp))
+    if cyc_pre < 1 or stim_dur < 1:
+        raise ValueError(
+            f'pre={pre}, post={post} must each be positive and >= one frame '
+            f'({fp:.4f}s) to build a non-empty cyc window.')
     width = cyc_pre + stim_dur
 
     unique_stims = s.unique_stims
@@ -195,6 +199,9 @@ def rebuild_cyc(s, pre=1.5, post=2.5, blank=None):
     s.dur_resp = post
     s.resp = s.resps = s.resp_err = None
     s.influence = None
+    print(f'{s.exp_id}: rebuilt cyc, width={width} frames '
+          f'({width * fp:.3f}s = {cyc_pre} pre + {stim_dur} post), '
+          f'n_trials={n_trials}')
     return cyc
 
 

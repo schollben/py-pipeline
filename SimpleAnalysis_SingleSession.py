@@ -29,16 +29,12 @@ print(f'{dat.exp_id}: {dat.n_rois} ROIs, '
 # show average image with ROI mask
 plot_avg_rois(dat,vmax_frac=0.6)
 
-
 # %%  rebuild cyc from raw dff (un-blanked, wider) and inspect it to pick windows
-rebuild_cyc(dat, pre=-1, post=3);
+# pre/post: seconds before/after stimulus onset to include in cyc (for plotting and response computation)
+rebuild_cyc(dat, pre=1, post=2);
 
-
-# %% 2. trial-averaged time-varying responses (one or more cells)
-# always plots the full cyc window (as built by rebuild_cyc); baseline_subtract
-# removes the dF/F offset; n=<count> above each stim shows the trials in that
-# average. use this to read the true artifact extent off the rebuilt cyc, then
-# choose baseline/peak windows for compute_responses / influence_* below.
+# trial-averaged time-varying responses (one or more cells)
+# always plots the full cyc window (as built by rebuild_cyc)
 plot_stim_traces(dat, [1,5,10,15,20],
                  mask_artifact=False,
                  baseline_subtract=False,
@@ -47,7 +43,7 @@ plot_stim_traces(dat, [1,5,10,15,20],
 # recompute peak-minus-baseline responses from cyc: the pipeline's FFT-based
 # resp/resps are all-NaN for opto sessions (FFT propagates the photostim blank).
 # baseline/peak: windows read off the plot above (seconds relative to onset).
-compute_responses(dat, baseline=(-1.0, -0.5), peak=(0.4, 1.2))
+compute_responses(dat, baseline=(-1.0, -0.5), peak=(0.4, 1.2));
 
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit)
