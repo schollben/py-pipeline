@@ -5,7 +5,8 @@ import seaborn as sns
 from .session import cyc_response_windows, cyc_onset
 
 
-def compute_responses(s, baseline_guard_sec=0.5, post_sec=1.0):
+def compute_responses(s, baseline_guard_sec=0.5, post_sec=1.0,
+                      baseline=None, peak=None):
     """Recompute peak-minus-baseline responses from cyc, robust to NaN blanking.
 
     Replaces the pipeline's FFT-based `resp`/`resps`/`resp_err`, which are all
@@ -16,11 +17,14 @@ def compute_responses(s, baseline_guard_sec=0.5, post_sec=1.0):
         response = max(cyc over post-blank peak window) - mean(cyc over baseline)
 
     with windows from `cyc_response_windows` (baseline before the artifact, peak
-    after the blank). Sets and returns s.resp; also sets s.resps, s.resp_err.
-    Shapes match the pipeline's: resp/resp_err (n_cells, n_stims),
+    after the blank). `baseline`/`peak` are optional (t0, t1) sec-relative-to-onset
+    overrides passed through to `cyc_response_windows` (e.g. windows read off a
+    `rebuild_cyc`-produced cyc). Sets and returns s.resp; also sets s.resps,
+    s.resp_err. Shapes match the pipeline's: resp/resp_err (n_cells, n_stims),
     resps (n_cells, n_stims, n_trials).
     """
-    base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec)
+    base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec,
+                                             baseline, peak)
     baseline = np.nanmean(s.cyc[..., base_sl], axis=3)     # (cells, stims, trials)
     peak = np.nanmax(s.cyc[..., peak_sl], axis=3)          # (cells, stims, trials)
     resps = peak - baseline

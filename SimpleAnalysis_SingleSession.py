@@ -6,10 +6,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from analysis import (load_session, compute_responses, plot_avg_rois, plot_stim_traces,
-                      plot_tuning_curves, compute_selectivity, plot_preference_maps,
-                      describe_photostim_groups, plot_photostim_group_heatmaps,
-                      plot_photostim_target_traces, compute_influence,
+from analysis import (load_session, rebuild_cyc, compute_responses, plot_avg_rois,
+                      plot_stim_traces, plot_tuning_curves, compute_selectivity,
+                      plot_preference_maps, describe_photostim_groups,
+                      plot_photostim_group_heatmaps, plot_photostim_target_traces,
+                      influence_grand, influence_by_stim, influence_bootstrap,
                       plot_influence_maps, plot_influence_by_contrast)
 
 sns.set_theme(context='notebook', style='white')
@@ -22,25 +23,33 @@ FNAME = folderName + 'TSeries-07132025-1042-003.h5'
 
 dat = load_session(FNAME)
 
-# recompute peak-minus-baseline responses from cyc: the pipeline's FFT-based
-# resp/resps are all-NaN for opto sessions (FFT propagates the photostim blank).
-compute_responses(dat)
-
 print(f'{dat.exp_id}: {dat.n_rois} ROIs, '
       f'{len(dat.directions)} directions, {len(dat.contrasts)} contrasts')
 
 # show average image with ROI mask
-plot_avg_rois(dat,vmax_frac=0.6) 
+plot_avg_rois(dat,vmax_frac=0.6)
+
+
+# %% 1b. rebuild cyc from raw dff (un-blanked, wider) and inspect it to pick windows
+# cells 2 / 6b (with mask_artifact=False) now show the full un-blanked trace.
+rebuild_cyc(dat, pre=1.5, post=2.5)
 
 
 # %% 2. trial-averaged time-varying responses (one or more cells)
 # window=(t0,t1) sec relative to onset; baseline_subtract removes the dF/F offset;
 # n=<count> above each stim shows the trials in that average.
-plot_stim_traces(dat, [1,5,10,15,20], 
-                 window=(-2,5), 
-                 mask_artifact=True, 
-                 baseline_subtract=True, 
+# use this to read the true artifact extent off the rebuilt cyc, then choose
+# baseline/peak windows for compute_responses / influence_* below.
+plot_stim_traces(dat, [1,5,10,15,20],
+                 window=(-2, 2),
+                 mask_artifact=False,
+                 baseline_subtract=True,
                  trials='sham');
+
+# recompute peak-minus-baseline responses from cyc: the pipeline's FFT-based
+# resp/resps are all-NaN for opto sessions (FFT propagates the photostim blank).
+# baseline/peak: windows read off the plot above (seconds relative to onset).
+compute_responses(dat, baseline=(-1.0, -0.5), peak=(0.4, 1.2))
 
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit)
@@ -58,19 +67,22 @@ plot_preference_maps(dat, thr=0.1);
 # %% 6. photostimulation group dF/F activity
 describe_photostim_groups(dat)
 
-plot_photostim_group_heatmaps(dat, mode='zscore');
+# plot_photostim_group_heatmaps(dat, mode='zscore');
+plot_photostim_target_traces(dat, window=(-0.5, 1.5));
 
 
-# %% 6b. targeted-ROI timecourses (real vs sham), rows=groups, cols=targets
-plot_photostim_target_traces(dat, window=(-1, 2));
-
-
-# %% 7. influence maps (photostim vs sham)
-compute_influence(dat);
+# %% 7. influence: grand average across all stimulus conditions
+influence_grand(dat, baseline=(-1.0, -0.5), peak=(0.4, 1.2));
 plot_influence_maps(dat);
 
 
 # %% 8. influence maps by stimulus contrast
+influence_by_stim(dat, baseline=(-1.0, -0.5), peak=(0.4, 1.2));
 plot_influence_by_contrast(dat);
+
+
+# %% 9. bootstrap influence (mean/SEM/CI over resampled trials)
+influence_bootstrap(dat, by='grand', n_boot=1000, seed=0);
+{tn: (v['grand'], v['sem']) for tn, v in dat.influence.items()}
 
 

@@ -187,54 +187,192 @@ def plot_photostim_group_heatmaps(s, mode='raw'):
     return fig
 
 
-def compute_influence(s, baseline_guard_sec=0.5, post_sec=1.0):
-    """Per-group influence of photostimulation relative to its paired sham.
+def group_trial_resp(s, target_tn, grp, base_sl, peak_sl):
+    """(n_cells, n_stims, n_trials) per-trial peak-minus-baseline response.
 
-    For each real group, and each visual stim id, computes a peak response
-    (post-blank peak minus pre-artifact baseline, from the trial-averaged cyc
-    trace) separately for the real group's trials and its sham's trials, then:
+    Trial-preserving replacement for the old average-then-peak measurement:
+    baseline and peak are computed per trial (not on the trial-averaged trace)
+    so the trial axis survives for mean/SEM and bootstrap use downstream.
+    NaN where a (stim, trial) slot isn't filled for this group.
 
-        influence[cell, stim] = (resp_real - resp_sham) / resp_sham
+    grp : (n_stims, n_trials) target_number per cyc trial slot, from
+        `cyc_trial_group`. base_sl, peak_sl : frame slices from
+        `cyc_response_windows`.
+    """
+    n_stims = len(s.unique_stims)
+    n_trials = s.cyc.shape[2]
+    resp = np.full((s.n_rois, n_stims, n_trials), np.nan)
+    for si in range(n_stims):
+        trial_idx = np.where(grp[si] == target_tn)[0]
+        if len(trial_idx) == 0:
+            continue
+        traces = s.cyc[:, si, trial_idx, :]                   # (n_cells, n_sel, n_frames)
+        baseline = np.nanmean(traces[..., base_sl], axis=-1)  # (n_cells, n_sel)
+        post = np.nanmax(traces[..., peak_sl], axis=-1)       # (n_cells, n_sel)
+        resp[:, si, trial_idx] = post - baseline
+    return resp
 
-    Peak responses are recomputed per (cell, stim, group) from the group-specific
-    subset of cyc trials — the pipeline's precomputed `resp` mixes all groups
-    together and cannot be used here. Baseline / peak windows come from the shared
-    `cyc_response_windows`, so the photostim dip + NaN-blank are excluded (an
-    earlier version measured the baseline across the pre-onset dip).
 
-    Sets s.influence = {real_tn: {'influence': (n_cells, n_stims), 'grand': (n_cells,)}}
-    and returns the same dict.
+def influence_grand(s, baseline_guard_sec=0.5, post_sec=1.0,
+                    baseline=None, peak=None):
+    """Grand-average influence of each target group on all nontargets.
+
+    Diagnostic entry point: pools every trial of the real group and every trial
+    of its paired sham (across all stimulus conditions), takes the mean of each,
+    and forms:
+
+        influence[cell] = (mean(resp_real) - mean(resp_sham)) / mean(resp_sham)
+
+    Per-trial responses come from `group_trial_resp` (peak-minus-baseline
+    computed per trial, not on the trial-averaged trace — see that function's
+    docstring for why). Baseline / peak windows come from `cyc_response_windows`;
+    pass explicit `baseline=`/`peak=` (seconds relative to onset) for windows read
+    off a `rebuild_cyc`-produced cyc.
+
+    Sets s.influence = {real_tn: {'grand': (n_cells,), 'kind': 'grand'}} and
+    returns the same dict.
     """
     gmap = photostim_group_map(s)
     grp = cyc_trial_group(s)
-    n_stims = len(s.unique_stims)
-    base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec)
-
-    def group_peak_resp(target_tn):
-        """(n_cells, n_stims) peak-minus-baseline response for one group."""
-        resp = np.full((s.n_rois, n_stims), np.nan)
-        for si in range(n_stims):
-            trial_idx = np.where(grp[si] == target_tn)[0]
-            if len(trial_idx) == 0:
-                continue
-            traces = s.cyc[:, si, trial_idx, :]              # (n_cells, n_sel, n_frames)
-            avg = np.nanmean(traces, axis=1)                  # (n_cells, n_frames)
-            baseline = np.nanmean(avg[:, base_sl], axis=1)
-            post = np.nanmax(avg[:, peak_sl], axis=1)
-            resp[:, si] = post - baseline
-        return resp
+    base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec,
+                                             baseline, peak)
 
     influence = {}
     for real_tn, info in gmap.items():
-        resp_real = group_peak_resp(real_tn)
-        resp_sham = group_peak_resp(info['sham'])
+        resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl)
+        resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl)
+        mean_real = np.nanmean(resp_real, axis=(1, 2))    # (n_cells,)
+        mean_sham = np.nanmean(resp_sham, axis=(1, 2))    # (n_cells,)
         with np.errstate(invalid='ignore', divide='ignore'):
-            inf = np.where(np.abs(resp_sham) > 1e-6,
-                           (resp_real - resp_sham) / resp_sham, np.nan)
+            grand = np.where(np.abs(mean_sham) > 1e-6,
+                             (mean_real - mean_sham) / mean_sham, np.nan)
+        influence[real_tn] = dict(grand=grand, kind='grand')
+
+    s.influence = influence
+    return influence
+
+
+def influence_by_stim(s, baseline_guard_sec=0.5, post_sec=1.0,
+                      baseline=None, peak=None):
+    """Influence of each target group on all nontargets, per stimulus condition.
+
+    Same measure as `influence_grand`, but trials are pooled within each
+    stimulus id rather than across all of them:
+
+        influence[cell, stim] = (mean(resp_real) - mean(resp_sham)) / mean(resp_sham)
+
+    Sets s.influence = {real_tn: {'influence': (n_cells, n_stims),
+    'grand': (n_cells,), 'kind': 'stim'}} and returns the same dict. `grand` is
+    the mean of `influence` across stims, for `plot_influence_maps`.
+    """
+    gmap = photostim_group_map(s)
+    grp = cyc_trial_group(s)
+    base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec,
+                                             baseline, peak)
+
+    influence = {}
+    for real_tn, info in gmap.items():
+        resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl)
+        resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl)
+        mean_real = np.nanmean(resp_real, axis=2)    # (n_cells, n_stims)
+        mean_sham = np.nanmean(resp_sham, axis=2)    # (n_cells, n_stims)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            inf = np.where(np.abs(mean_sham) > 1e-6,
+                           (mean_real - mean_sham) / mean_sham, np.nan)
         influence[real_tn] = dict(
             influence=inf,
             grand=np.nanmean(inf, axis=1),
+            kind='stim',
         )
+
+    s.influence = influence
+    return influence
+
+
+def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
+                        baseline_guard_sec=0.5, post_sec=1.0,
+                        baseline=None, peak=None):
+    """Bootstrap distribution of influence over trials.
+
+    by : 'grand' (trials pooled across all stimulus conditions, matching
+        `influence_grand`) or 'stim' (trials pooled per stimulus condition,
+        matching `influence_by_stim`).
+
+    For each cell (and, when by='stim', each stimulus condition), resamples the
+    pooled real trials and the pooled sham trials *independently* with
+    replacement (they are separate trial sets, not paired), recomputes
+    mean(real) / mean(sham) and the ratio, and repeats `n_boot` times. Reports
+    the point estimate (from `influence_grand`/`influence_by_stim`, unresampled),
+    the bootstrap SEM (SD of the resampled distribution), and the 2.5/97.5
+    percentile CI.
+
+    Sets s.influence = {real_tn: {
+        'grand' or 'influence': point estimate (as in influence_grand/by_stim),
+        'sem': same shape, bootstrap SD,
+        'ci_lo', 'ci_hi': same shape, 2.5th/97.5th percentiles,
+        'kind': 'bootstrap', 'by': by, 'n_boot': n_boot, 'seed': seed,
+    }} and returns the same dict.
+    """
+    if by not in ('grand', 'stim'):
+        raise ValueError("by must be 'grand' or 'stim'")
+
+    point = (influence_grand if by == 'grand' else influence_by_stim)(
+        s, baseline_guard_sec, post_sec, baseline, peak)
+
+    gmap = photostim_group_map(s)
+    grp = cyc_trial_group(s)
+    base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec,
+                                             baseline, peak)
+    rng = np.random.default_rng(seed)
+
+    influence = {}
+    for real_tn, info in gmap.items():
+        resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl)
+        resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl)
+        # (n_cells, n_stims, n_trials) -> pool trials per the 'by' scope
+        if by == 'grand':
+            real_pool = resp_real.reshape(s.n_rois, -1)   # (n_cells, n_stims*n_trials)
+            sham_pool = resp_sham.reshape(s.n_rois, -1)
+            boot = np.full((s.n_rois, n_boot), np.nan)
+            for b in range(n_boot):
+                r = rng.choice(real_pool.shape[1], real_pool.shape[1], replace=True)
+                h = rng.choice(sham_pool.shape[1], sham_pool.shape[1], replace=True)
+                mr = np.nanmean(real_pool[:, r], axis=1)
+                mh = np.nanmean(sham_pool[:, h], axis=1)
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    boot[:, b] = np.where(np.abs(mh) > 1e-6, (mr - mh) / mh, np.nan)
+            influence[real_tn] = dict(
+                grand=point[real_tn]['grand'],
+                sem=np.nanstd(boot, axis=1),
+                ci_lo=np.nanpercentile(boot, 2.5, axis=1),
+                ci_hi=np.nanpercentile(boot, 97.5, axis=1),
+                kind='bootstrap', by=by, n_boot=n_boot, seed=seed,
+            )
+        else:
+            n_stims = resp_real.shape[1]
+            sem = np.full((s.n_rois, n_stims), np.nan)
+            ci_lo = np.full((s.n_rois, n_stims), np.nan)
+            ci_hi = np.full((s.n_rois, n_stims), np.nan)
+            for si in range(n_stims):
+                real_pool = resp_real[:, si, :]    # (n_cells, n_trials)
+                sham_pool = resp_sham[:, si, :]
+                boot = np.full((s.n_rois, n_boot), np.nan)
+                for b in range(n_boot):
+                    r = rng.choice(real_pool.shape[1], real_pool.shape[1], replace=True)
+                    h = rng.choice(sham_pool.shape[1], sham_pool.shape[1], replace=True)
+                    mr = np.nanmean(real_pool[:, r], axis=1)
+                    mh = np.nanmean(sham_pool[:, h], axis=1)
+                    with np.errstate(invalid='ignore', divide='ignore'):
+                        boot[:, b] = np.where(np.abs(mh) > 1e-6, (mr - mh) / mh, np.nan)
+                sem[:, si] = np.nanstd(boot, axis=1)
+                ci_lo[:, si] = np.nanpercentile(boot, 2.5, axis=1)
+                ci_hi[:, si] = np.nanpercentile(boot, 97.5, axis=1)
+            influence[real_tn] = dict(
+                influence=point[real_tn]['influence'],
+                grand=point[real_tn]['grand'],
+                sem=sem, ci_lo=ci_lo, ci_hi=ci_hi,
+                kind='bootstrap', by=by, n_boot=n_boot, seed=seed,
+            )
 
     s.influence = influence
     return influence
@@ -275,7 +413,11 @@ def _draw_influence_map(ax, s, grand_influence, target_rois, title, vlim=None):
 def plot_influence_maps(s, influence=None):
     """One spatial influence map per real photostim group (grand mean across stims)."""
     if influence is None:
-        influence = s.influence if s.influence is not None else compute_influence(s)
+        if s.influence is None:
+            raise ValueError(
+                f'{s.exp_id}: no influence computed; run rebuild_cyc() -> '
+                'compute_responses() -> influence_grand(...) first')
+        influence = s.influence
     gmap = photostim_group_map(s)
     real_groups = sorted(influence.keys())
 
@@ -292,7 +434,11 @@ def plot_influence_maps(s, influence=None):
 def plot_influence_by_contrast(s, influence=None):
     """Spatial influence maps split by stimulus contrast (rows=groups, cols=contrast)."""
     if influence is None:
-        influence = s.influence if s.influence is not None else compute_influence(s)
+        if s.influence is None:
+            raise ValueError(
+                f'{s.exp_id}: no influence computed; run rebuild_cyc() -> '
+                'compute_responses() -> influence_by_stim(...) first')
+        influence = s.influence
     gmap = photostim_group_map(s)
     real_groups = sorted(influence.keys())
     contrasts = s.contrasts
