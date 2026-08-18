@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.colors import TwoSlopeNorm
 
-from .session import cyc_response_windows, cyc_onset
+from .session import cyc_response_windows, cyc_onset, _window_slice
 
 _TARGET_COLOR = 'purple'
 _NONTARGET_COLOR = 'gray'
@@ -74,10 +74,16 @@ def cyc_trial_group(s):
 
     Reproduces gen_stim_cyc's trial-fill ordering: iterate presentations in
     stim_id order, and for the k-th occurrence of a given stim, that cyc trial
-    slot [stim_index, k] is filled from that presentation. `target_number` is
-    directly index-aligned with `stim_id` (no offset) — verified empirically:
-    this pairing gives real photostim groups a much larger response in their
-    targeted cells than their sham pair; a shifted pairing gives the reverse.
+    slot [stim_index, k] is filled from that presentation.
+
+    `target_number` is taken as index-aligned with `stim_id` (no offset). That
+    holds on a session as loaded, and on one where `dropFirstEvents` has trimmed
+    both consistently — real photostim groups then show a much larger response in
+    their targeted cells than their sham pair, and a shifted pairing gives the
+    reverse. Note the empirical check behind that claim only exercises the
+    as-loaded case; it is `dropFirstEvents`' job to preserve the alignment, and a
+    bug there previously broke it silently (real/sham came out swapped). The
+    real>sham post-condition is now checked by `check_real_sham_ordering`.
     """
     stim_id = s.stim_id
     unique_stims = s.unique_stims
@@ -85,6 +91,11 @@ def cyc_trial_group(s):
     n_stims = len(unique_stims)
     n_trials = s.cyc.shape[2]
     n = min(len(stim_id), len(target_number))
+    if abs(len(stim_id) - len(target_number)) > 1:
+        print(f'[!] {s.exp_id}: stim_id ({len(stim_id)}) and target_number '
+              f'({len(target_number)}) differ by more than one entry; pairing them '
+              f'by index and truncating to {n}. Photostim group labels may be '
+              f'misassigned — check the event alignment for this session.')
 
     grp = np.full((n_stims, n_trials), np.nan)
     trial_count = np.zeros(n_stims, dtype=int)
@@ -95,6 +106,47 @@ def cyc_trial_group(s):
             grp[ind, k] = target_number[i]
         trial_count[ind] += 1
     return grp
+
+
+def check_real_sham_ordering(s, base_sl=None, peak_sl=None, verbose=True):
+    """Sanity-check that each real group drives its targets harder than its sham.
+
+    A sham fires at 0 mW, so it cannot drive its targeted ROIs. If a sham's mean
+    target-ROI response exceeds its real partner's, the trial<->target_number
+    pairing is off (typically a leading-event/off-by-one bug upstream in
+    `dropFirstEvents`) and every real/sham comparison downstream is inverted.
+
+    Returns True when all groups are ordered correctly, False otherwise. Warns on
+    each violation when `verbose`.
+    """
+    gmap = photostim_group_map(s)
+    grp = cyc_trial_group(s)
+    if base_sl is None or peak_sl is None:
+        base_sl, peak_sl = cyc_response_windows(s)
+
+    def target_resp(rois, tn):
+        si, ti = np.where(grp == tn)
+        if not len(si):
+            return np.nan
+        tr = s.cyc[np.ix_(np.asarray(rois))][:, si, ti, :]
+        return float(np.nanmean(np.nanmax(tr[..., peak_sl], axis=-1)
+                                - np.nanmean(tr[..., base_sl], axis=-1)))
+
+    ok = True
+    for real_tn, info in sorted(gmap.items()):
+        rois = info['target_rois']
+        if not len(rois):
+            continue
+        r, sh = target_resp(rois, real_tn), target_resp(rois, info['sham'])
+        if np.isnan(r) or np.isnan(sh):
+            continue
+        if r <= sh:
+            ok = False
+            if verbose:
+                print(f'[!] {s.exp_id}: group {real_tn:g} sham response ({sh:+.4f}) '
+                      f'exceeds real ({r:+.4f}) in its own targets — real/sham are '
+                      f'likely swapped; check dropFirstEvents / event alignment.')
+    return ok
 
 
 def describe_photostim_groups(s):
@@ -187,13 +239,18 @@ def plot_photostim_group_heatmaps(s, mode='raw'):
     return fig
 
 
-def group_trial_resp(s, target_tn, grp, base_sl, peak_sl):
+def group_trial_resp(s, target_tn, grp, base_sl=None, peak_sl=None, resps=None):
     """(n_cells, n_stims, n_trials) per-trial peak-minus-baseline response.
 
-    Trial-preserving replacement for the old average-then-peak measurement:
-    baseline and peak are computed per trial (not on the trial-averaged trace)
-    so the trial axis survives for mean/SEM and bootstrap use downstream.
-    NaN where a (stim, trial) slot isn't filled for this group.
+    Trial-preserving measurement: baseline and peak are computed per trial (not on
+    the trial-averaged trace) so the trial axis survives for mean/SEM and bootstrap
+    use downstream. NaN where a (stim, trial) slot isn't filled for this group.
+
+    `resps` : precomputed (n_cells, n_stims, n_trials) per-trial responses — pass
+        `s.resps` from `compute_responses` so influence measures exactly what
+        `resp` measured. Selecting this group is then just a mask over the trial
+        axis, not a recomputation. When None, recomputes from `s.cyc` using
+        `base_sl`/`peak_sl` (the explicit-window override path).
 
     grp : (n_stims, n_trials) target_number per cyc trial slot, from
         `cyc_trial_group`. base_sl, peak_sl : frame slices from
@@ -206,14 +263,50 @@ def group_trial_resp(s, target_tn, grp, base_sl, peak_sl):
         trial_idx = np.where(grp[si] == target_tn)[0]
         if len(trial_idx) == 0:
             continue
-        traces = s.cyc[:, si, trial_idx, :]                   # (n_cells, n_sel, n_frames)
-        baseline = np.nanmean(traces[..., base_sl], axis=-1)  # (n_cells, n_sel)
-        post = np.nanmax(traces[..., peak_sl], axis=-1)       # (n_cells, n_sel)
-        resp[:, si, trial_idx] = post - baseline
+        if resps is not None:
+            resp[:, si, trial_idx] = resps[:, si, trial_idx]
+        else:
+            traces = s.cyc[:, si, trial_idx, :]                   # (n_cells, n_sel, n_frames)
+            baseline = np.nanmean(traces[..., base_sl], axis=-1)  # (n_cells, n_sel)
+            post = np.nanmax(traces[..., peak_sl], axis=-1)       # (n_cells, n_sel)
+            resp[:, si, trial_idx] = post - baseline
     return resp
 
 
-def influence_grand(s, baseline_guard_sec=0.5, post_sec=1.0,
+def _influence_trial_resps(s, baseline_guard_sec, post_sec, baseline, peak):
+    """Resolve the per-trial response source shared by the influence functions.
+
+    Default: reuse `s.resps` from `compute_responses`, so influence and `resp`
+    always reflect the same measurement windows. Passing any window argument
+    explicitly overrides that and recomputes from `s.cyc`.
+
+    Returns (resps_or_None, base_sl, peak_sl).
+    """
+    explicit = (baseline is not None or peak is not None
+                or baseline_guard_sec is not None or post_sec is not None)
+    if explicit:
+        kw = {}
+        if baseline_guard_sec is not None:
+            kw['baseline_guard_sec'] = baseline_guard_sec
+        if post_sec is not None:
+            kw['post_sec'] = post_sec
+        base_sl, peak_sl = cyc_response_windows(s, baseline=baseline, peak=peak, **kw)
+        return None, base_sl, peak_sl
+
+    if s.resps is None:
+        raise ValueError(
+            f'{s.exp_id}: no per-trial responses on the session; run '
+            f'compute_responses(...) first so influence uses the same baseline/peak '
+            f'windows as resp, or pass baseline=/peak= explicitly to override.')
+    if s.resps.shape[:3] != (s.n_rois, len(s.unique_stims), s.cyc.shape[2]):
+        raise ValueError(
+            f'{s.exp_id}: s.resps {s.resps.shape} does not match the current cyc '
+            f'geometry ({s.n_rois}, {len(s.unique_stims)}, {s.cyc.shape[2]}); '
+            f're-run compute_responses(...) after rebuild_cyc().')
+    return s.resps, None, None
+
+
+def influence_grand(s, baseline_guard_sec=None, post_sec=None,
                     baseline=None, peak=None):
     """Grand-average influence of each target group on all nontargets.
 
@@ -223,24 +316,24 @@ def influence_grand(s, baseline_guard_sec=0.5, post_sec=1.0,
 
         influence[cell] = (mean(resp_real) - mean(resp_sham)) / mean(resp_sham)
 
-    Per-trial responses come from `group_trial_resp` (peak-minus-baseline
-    computed per trial, not on the trial-averaged trace — see that function's
-    docstring for why). Baseline / peak windows come from `cyc_response_windows`;
-    pass explicit `baseline=`/`peak=` (seconds from the start of the cyc window) for windows read
-    off a `rebuild_cyc`-produced cyc.
+    Per-trial responses default to `s.resps` from `compute_responses`, so influence
+    is measured over exactly the same baseline/peak windows as `resp` — run
+    `compute_responses(...)` first or this raises. Passing any of
+    `baseline`/`peak`/`baseline_guard_sec`/`post_sec` overrides that and recomputes
+    from `s.cyc` with those windows (seconds from the start of the cyc window).
 
     Sets s.influence = {real_tn: {'grand': (n_cells,), 'kind': 'grand'}} and
     returns the same dict.
     """
     gmap = photostim_group_map(s)
     grp = cyc_trial_group(s)
-    base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec,
-                                             baseline, peak)
+    resps, base_sl, peak_sl = _influence_trial_resps(
+        s, baseline_guard_sec, post_sec, baseline, peak)
 
     influence = {}
     for real_tn, info in gmap.items():
-        resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl)
-        resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl)
+        resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl, resps)
+        resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl, resps)
         mean_real = np.nanmean(resp_real, axis=(1, 2))    # (n_cells,)
         mean_sham = np.nanmean(resp_sham, axis=(1, 2))    # (n_cells,)
         with np.errstate(invalid='ignore', divide='ignore'):
@@ -252,7 +345,7 @@ def influence_grand(s, baseline_guard_sec=0.5, post_sec=1.0,
     return influence
 
 
-def influence_by_stim(s, baseline_guard_sec=0.5, post_sec=1.0,
+def influence_by_stim(s, baseline_guard_sec=None, post_sec=None,
                       baseline=None, peak=None):
     """Influence of each target group on all nontargets, per stimulus condition.
 
@@ -261,19 +354,22 @@ def influence_by_stim(s, baseline_guard_sec=0.5, post_sec=1.0,
 
         influence[cell, stim] = (mean(resp_real) - mean(resp_sham)) / mean(resp_sham)
 
+    Window handling matches `influence_grand`: defaults to `s.resps` from
+    `compute_responses`, overridden by any explicit window argument.
+
     Sets s.influence = {real_tn: {'influence': (n_cells, n_stims),
     'grand': (n_cells,), 'kind': 'stim'}} and returns the same dict. `grand` is
     the mean of `influence` across stims, for `plot_influence_maps`.
     """
     gmap = photostim_group_map(s)
     grp = cyc_trial_group(s)
-    base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec,
-                                             baseline, peak)
+    resps, base_sl, peak_sl = _influence_trial_resps(
+        s, baseline_guard_sec, post_sec, baseline, peak)
 
     influence = {}
     for real_tn, info in gmap.items():
-        resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl)
-        resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl)
+        resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl, resps)
+        resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl, resps)
         mean_real = np.nanmean(resp_real, axis=2)    # (n_cells, n_stims)
         mean_sham = np.nanmean(resp_sham, axis=2)    # (n_cells, n_stims)
         with np.errstate(invalid='ignore', divide='ignore'):
@@ -290,7 +386,7 @@ def influence_by_stim(s, baseline_guard_sec=0.5, post_sec=1.0,
 
 
 def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
-                        baseline_guard_sec=0.5, post_sec=1.0,
+                        baseline_guard_sec=None, post_sec=None,
                         baseline=None, peak=None):
     """Bootstrap distribution of influence over trials.
 
@@ -321,14 +417,14 @@ def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
 
     gmap = photostim_group_map(s)
     grp = cyc_trial_group(s)
-    base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec,
-                                             baseline, peak)
+    resps, base_sl, peak_sl = _influence_trial_resps(
+        s, baseline_guard_sec, post_sec, baseline, peak)
     rng = np.random.default_rng(seed)
 
     influence = {}
     for real_tn, info in gmap.items():
-        resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl)
-        resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl)
+        resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl, resps)
+        resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl, resps)
         # (n_cells, n_stims, n_trials) -> pool trials per the 'by' scope
         if by == 'grand':
             real_pool = resp_real.reshape(s.n_rois, -1)   # (n_cells, n_stims*n_trials)
@@ -459,7 +555,9 @@ def plot_influence_by_contrast(s, influence=None):
     return fig
 
 
-def plot_photostim_target_traces(s, window=None):
+def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
+                                 post_sec=1.0, baseline=None, peak=None,
+                                 show_windows=True):
     """Trial-averaged cyc timecourse of each targeted ROI, real vs sham.
 
     Grid of line plots: one row per real photostim group/ensemble, one column per
@@ -467,8 +565,18 @@ def plot_photostim_target_traces(s, window=None):
     and paired sham (power=0) trial-averaged traces (mean +/- SEM), collapsed
     across visual stims (as plot_photostim_group_heatmaps does).
 
-    window : (t0, t1) in seconds relative to visual onset to crop the displayed
-        frames; None shows the full cyc window.
+    window : (t0, t1) in seconds from the START of the cyc window (the same
+        convention as `baseline`/`peak` and `compute_responses`, NOT relative to
+        onset) to crop the displayed frames; None shows the full cyc window. For
+        a `rebuild_cyc(preStim=1, postStim=2)` cyc the window spans 0 -> 3.0 s
+        with onset at 1.0 s, so `window=(0.5, 2.5)` is -0.5 to 1.5 s around onset.
+
+    baseline_guard_sec, post_sec, baseline, peak : identical to
+        `compute_responses` / `cyc_response_windows` — the measurement windows
+        that responses are computed over. Pass the same values you passed to
+        `compute_responses` so the plot shows what was actually measured.
+    show_windows : shade the baseline (gray) and peak (yellow) measurement
+        windows behind each trace.
     """
     if not s.has_photostim:
         print(f'{s.exp_id}: no photostimulation data in this session.')
@@ -478,15 +586,19 @@ def plot_photostim_target_traces(s, window=None):
     grp = cyc_trial_group(s)
     real_groups = sorted(gmap.keys())
     n_frames = s.cyc.shape[3]
+    fp = s.frame_period
     onset = cyc_onset(s)
+    base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec,
+                                            baseline, peak)
+    check_real_sham_ordering(s, base_sl, peak_sl)
 
-    # display frame slice from the requested time window (relative to onset)
+    # display frame slice from the requested time window (from cyc-window start)
     if window is not None:
-        f0 = int(np.clip(onset + round(window[0] / s.frame_period), 0, n_frames))
-        f1 = int(np.clip(onset + round(window[1] / s.frame_period), f0 + 1, n_frames))
+        disp = _window_slice(s, window, n_frames, 'window')
+        f0, f1 = disp.start, disp.stop
     else:
         f0, f1 = 0, n_frames
-    xf = np.arange(f0, f1)
+    xf = np.arange(f0, f1) * fp                          # seconds from cyc start
 
     n_rows = len(real_groups)
     n_cols = max(len(gmap[tn]['target_rois']) for tn in real_groups)
@@ -511,6 +623,11 @@ def plot_photostim_target_traces(s, window=None):
                 ax.axis('off')
                 continue
             roi = int(target_rois[col])
+            if show_windows:
+                ax.axvspan(base_sl.start * fp, base_sl.stop * fp,
+                           color='0.5', alpha=0.15, lw=0)
+                ax.axvspan(peak_sl.start * fp, peak_sl.stop * fp,
+                           color='gold', alpha=0.2, lw=0)
             for tn, color, label in ((real_tn, _TARGET_COLOR, 'real'),
                                      (sham_tn, _NONTARGET_COLOR, 'sham')):
                 mean, sem = mean_sem(roi, tn)
@@ -518,7 +635,8 @@ def plot_photostim_target_traces(s, window=None):
                         label=(label if not legended else None))
                 ax.fill_between(xf, (mean - sem)[f0:f1], (mean + sem)[f0:f1],
                                 color=color, alpha=0.2, lw=0)
-            ax.axvline(onset, color='black', lw=0.8, ls='--')
+            ax.axvline(onset * fp, color='black', lw=0.8, ls='--')
+            ax.set_xlim(f0 * fp, (f1 - 1) * fp)
             ax.set_title(f'grp {real_tn:g} · ROI {roi}', fontsize=8)
             if col == 0:
                 ax.set_ylabel(f'group {real_tn:g}\ndF/F', fontsize=8)
@@ -527,7 +645,7 @@ def plot_photostim_target_traces(s, window=None):
                 legended = True
     for ax in axes[-1]:
         if ax.axison:
-            ax.set_xlabel('frame (onset = dashed)', fontsize=8)
+            ax.set_xlabel('time from cyc start (s; onset = dashed)', fontsize=8)
 
     sns.despine(fig=fig)
     fig.suptitle(f'{s.exp_id} · target-ROI timecourses (real vs sham)')

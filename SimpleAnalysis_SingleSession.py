@@ -1,4 +1,4 @@
-# %% 1. initialize
+# %% initialize
 
 %load_ext autoreload
 %autoreload 2
@@ -45,8 +45,7 @@ if check_event_alignment(dat):
 # pre/post: seconds before/after stimulus onset to include in cyc (for plotting and response computation)
 # offsetFrames: move the window earlier/later by this many frames (can be negative)
 # for example TSeries-07132025-1042-003.h5 appears to have a ~15 frame lead in the event timing (PMT shutter begins BEFORE stimulus, which is not possible)
-
-rebuild_cyc(dat, preStim=0.5, postStim=2, offsetFrames=-15);
+rebuild_cyc(dat, preStim=0.25, postStim=2, offsetFrames=-15);
 
 # trial-averaged time-varying responses (one or more cells)
 # always plots the full cyc window (as built by rebuild_cyc)
@@ -56,11 +55,12 @@ plot_stim_traces(dat, [1,2,10,15,20],
                  trials='sham');
 
 # recompute peak-minus-baseline responses from cyc
-# baseline/peak: windows read off the plot above, in seconds from the START of
-# the cyc window (t=0 is the left edge of the plot). With preStim=0.5, postStim=2
-# the window spans 0 -> 2.5 s and visual onset sits at 0.5 s.
+# baseline/peak: windows read off the plot above, in seconds from the START of the cyc window (t=0 is the left edge of the plot)
+# With preStim=0.25, postStim=2 the window spans 0 -> 2.25 s and visual onset sits at 0.25 s.
 # note -- eventually this will fixed once we understand the issues
-compute_responses(dat, baseline=(0, 0.4), peak=(1.4, 2));
+baseline=(0, 0.25)
+peak=(1.15, 1.4)
+compute_responses(dat, baseline=baseline, peak=peak);
 
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit)
@@ -74,20 +74,23 @@ print(f'gDSI median {np.nanmedian(dat.gdsi):.3f}  |  gOSI median {np.nanmedian(d
 plot_preference_maps(dat, thr=0.1);
 
 
-
 # %% 6. photostimulation group dF/F activity
 describe_photostim_groups(dat)
 # plot_photostim_group_heatmaps(dat, mode='zscore');
-plot_photostim_target_traces(dat, window=(-0.5, 1.5));
+plot_photostim_target_traces(dat, baseline=baseline, peak=peak);
+
+
 
 
 # %% 7. influence: grand average across all stimulus conditions
-influence_grand(dat, baseline=(0, 0.4), peak=(0.9, 1.7));
+# windows are inherited from compute_responses above (via dat.resps), so influence
+# and resp always measure the same thing; pass baseline=/peak= here only to override
+influence_grand(dat);
 plot_influence_maps(dat);
 
 
 # %% 8. influence maps by stimulus contrast
-influence_by_stim(dat, baseline=(0, 0.4), peak=(0.9, 1.7));
+influence_by_stim(dat);
 plot_influence_by_contrast(dat);
 
 

@@ -144,16 +144,28 @@ def check_event_alignment(s, n_show=5):
     untrimmed `stim_on_2p_frame`, while `target_number` (photostim) is already
     correctly aligned to the untrimmed `photostim_2p_frame`. See `dropFirstEvents`.
 
+    The primary signal is the photostim lag, `photostim_2p_frame - stim_on_2p_frame`,
+    tested against the session's OWN distribution rather than a fixed value. A real
+    photostim trial has a characteristic positive lag (3-4 frames on the July-2025
+    rig); the spurious event fires in lockstep, so its lag sits below every other
+    trial's. A fixed `lag[0] == 0` test would be wrong: on the Nov-2024 sessions the
+    lag is 0 on EVERY trial (that rig records the photostim at the visual frame), and
+    nothing is spurious there.
+
     Prints, from the 2P frame-index arrays (`stim_on_2p_frame`,
     `photostim_2p_frame` — not the raw vrec/seconds triggers):
-        - target_number[0]: 1 = no psychopy row-offset applied, 2 = applied
         - first `n_show` inter-event intervals for each stream
-        - first `n_show` values of photostim_2p_frame - stim_on_2p_frame
+        - lag[0] vs the min/median of the remaining lags (flagged when below min)
         - first stim_on ITI vs the median of the rest (flagged if > 2x)
+        - the length signature (len(pf) > len(son), len(tn) == len(stim_id) - 1)
+        - target_number[0], informational only (1 = no psychopy row-offset applied,
+          2 = applied); it corroborates but no longer drives the decision, since it
+          assumes the group cycle starts at 1
 
-    Returns True when dropFirstEvents(s) is recommended (target_number[0] == 2
-    and the first ITI is anomalous), else False. Returns False without printing
-    photostim-specific lines when the session has no photostim data.
+    Returns True when dropFirstEvents(s) is recommended — the lag outlier plus at
+    least one corroborating signal (anomalous first ITI, or the length signature).
+    Returns False without printing photostim-specific lines when the session has no
+    photostim data.
     """
     son = s.stim_on_2p_frame
     pf = s.photostim_2p_frame
@@ -171,20 +183,36 @@ def check_event_alignment(s, n_show=5):
         print('  no photostim data in this session — skipping photostim checks.')
         return False
 
-    offset_applied = tn[0] == 2
-    print(f'  target_number[0] = {tn[0]:g} '
-          f'({"psychopy row-offset already applied" if offset_applied else "no offset applied"})')
     if pf is not None and len(pf) > 1:
         pf_iti = np.diff(pf)
         print(f'  photostim_2p_frame first {n_show} ITIs (frames): {pf_iti[:n_show]}')
-    if pf is not None and len(pf) and len(son):
-        n = min(len(son), len(pf))
-        print(f'  photostim - stim_on, first {n_show}: {(pf[:n] - son[:n])[:n_show]}')
 
-    recommend = bool(offset_applied and first_anomalous)
+    # lag outlier: is the first pair in lockstep relative to this session's own lags?
+    lag_outlier = False
+    if pf is not None and len(pf) > 1 and len(son) > 1:
+        n = min(len(son), len(pf))
+        lag = pf[:n] - son[:n]
+        rest = lag[1:]
+        lag_outlier = bool(len(rest) and lag[0] < rest.min())
+        print(f'  photostim - stim_on, first {n_show}: {lag[:n_show]}')
+        print(f'  lag[0] = {lag[0]} vs min {rest.min()} / median {np.median(rest):.0f} '
+              f'of the rest ({"LOCKSTEP OUTLIER" if lag_outlier else "normal"})')
+
+    # length signature: the glitch adds a photostim TTL that psychopy never logged,
+    # and the pipeline's row-drop already shortened target_number by one.
+    pf_longer = pf is not None and len(pf) > len(son)
+    tn_pre_dropped = len(tn) == len(s.stim_id) - 1
+    print(f'  lengths: stim_id={len(s.stim_id)} stim_on={len(son)} '
+          f'photostim={len(pf) if pf is not None else 0} target_number={len(tn)}'
+          f'{"  [pf longer than stim_on]" if pf_longer else ""}'
+          f'{"  [target_number pre-dropped]" if tn_pre_dropped else ""}')
+    print(f'  target_number[0] = {tn[0]:g} (informational; '
+          f'{"psychopy row-offset already applied" if tn[0] == 2 else "no offset applied"})')
+
+    recommend = bool(lag_outlier and (first_anomalous or pf_longer or tn_pre_dropped))
     if recommend:
-        print('  [!] WARNING: first TTL pair looks spurious and target_number is '
-              'already offset -- run dropFirstEvents(s) before rebuild_cyc().')
+        print('  [!] WARNING: first TTL pair looks spurious (lockstep lag outlier) '
+              '-- run dropFirstEvents(s) before rebuild_cyc().')
     return recommend
 
 
@@ -196,27 +224,58 @@ def dropFirstEvents(s):
     `stim_on_2p_frame[0]` and `photostim_2p_frame[0]` are dropped (both
     spurious). `stim_id`/`stim_properties` are truncated at the *end* — they
     were never shifted, so once the leading TTL is gone they are exactly one
-    entry too long. `target_number`/`target_trial` are left unchanged: they are
-    already correctly aligned to the untrimmed `photostim_2p_frame` (verified
-    empirically — real-vs-sham response is inverted under any other pairing),
-    so dropping `photostim_2p_frame[0]` while keeping `target_number` as-is
-    reproduces that same correct pairing.
+    entry too long. That leaves `stim_id[i]` describing the presentation at the
+    untrimmed `stim_on_2p_frame[i + 1]` (verified: across-stim tuning strength is
+    0.042 under this pairing vs 0.027 under the alternative).
+
+    `target_number`/`target_trial` must end up on that SAME presentation, because
+    `cyc_trial_group` pairs `target_number[i]` with `stim_id[i]` to fill cyc trial
+    slots — it never indexes `photostim_2p_frame`. Two cases:
+
+      - The pipeline's `opto_offset_trigger` psychopy row-drop
+        (bruker_pipeline.py:674) already removed `target_number[0]`, so the array
+        arrives one short (`len(tn) == len(stim_id) - 1`). That row-drop aligned it
+        to the UNTRIMMED presentations (`tn[i]` describes raw presentation `i`,
+        verified on raw dff: real groups drive their targets 4-10x harder than sham
+        under this pairing and the reverse under any other). Post-drop `stim_id[i]`
+        describes raw presentation `i + 1`, so `target_number`/`target_trial` must
+        lose one more leading entry to land on the same presentation.
+      - No row-drop was applied (`len(tn) == len(stim_id)`): `target_number` still
+        carries the spurious event's own entry, so drop that one instead — the same
+        single leading drop, reached from a different starting length.
+
+    Either way exactly one leading entry comes off `target_number`/`target_trial`
+    here; what differs is only which upstream state we arrived from.
+
+    Detection is by length, not by `target_number[0] == 2`, which would assume the
+    group cycle always starts at 1.
 
     Mutates `s` in place. Raises if called twice on the same session.
     """
     if s._events_dropped:
         raise ValueError(f'{s.exp_id}: dropFirstEvents already applied.')
     n = len(s.stim_on_2p_frame) - 1
+    n_stim_id = len(s.stim_id)
     s.stim_on_2p_frame = s.stim_on_2p_frame[1:]
     s.stim_id = s.stim_id[:n]
     if s.stim_properties is not None:
         s.stim_properties = s.stim_properties[:n]          # same rows dropped as stim_id
+
+    note = ''
+    if s.target_number is not None:
+        pre_dropped = len(s.target_number) == n_stim_id - 1
+        s.target_number = s.target_number[1:]
+        if s.target_trial is not None:
+            s.target_trial = s.target_trial[1:]
+        note = ('; dropped target_number[0]/target_trial[0] '
+                + ('(on top of the upstream psychopy row-drop)' if pre_dropped
+                   else '(no upstream row-drop)'))
     if s.photostim_2p_frame is not None and s.target_number is not None:
         s.photostim_2p_frame = s.photostim_2p_frame[1:][:len(s.target_number)]
     s.unique_stims = np.unique(s.stim_id)
     s._events_dropped = True
     print(f'{s.exp_id}: dropped spurious first TTL pair; '
-          f'{len(s.stim_on_2p_frame)} presentations remain.')
+          f'{len(s.stim_on_2p_frame)} presentations remain{note}.')
 
 
 def rebuild_cyc(s, preStim=1.5, postStim=2.5, blank=None, offsetFrames=0):
