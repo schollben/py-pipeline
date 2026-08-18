@@ -60,7 +60,7 @@ plot_stim_traces(dat, [1,2,10,15,20],
 # the cyc window (t=0 is the left edge of the plot). With preStim=0.5, postStim=2
 # the window spans 0 -> 2.5 s and visual onset sits at 0.5 s.
 # note -- eventually this will fixed once we understand the issues
-compute_responses(dat, baseline=(0, 0.4), peak=(1.5, 2));
+compute_responses(dat, baseline=(0, 0.4), peak=(1.4, 2));
 
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit)

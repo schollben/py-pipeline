@@ -8,7 +8,7 @@ dirLoc = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/' # upd
 FNAME = dirLoc + 'TSeries-07132025-1042-003.h5'
 
 ROI = 10
-frameStart, frameEnd = 0, 1000
+frameStart, frameEnd = 0, 2000
 
 with h5py.File(FNAME, 'r') as f:
     dff = f['dff'][frameStart:frameEnd, ROI]
