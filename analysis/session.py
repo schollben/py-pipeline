@@ -126,7 +126,7 @@ def cyc_onset(s):
     return s.cyc.shape[3] - int(round(s.dur_resp / s.frame_period)) - 1
 
 
-def rebuild_cyc(s, pre=1.5, post=2.5, blank=None):
+def rebuild_cyc(s, preStim=1.5, postStim=2.5, blank=None):
     """Replace s.cyc with a raw, un-blanked cyc built directly from s.dff.
 
     `s.cyc` (as loaded) is built upstream from `dff_nan` (photostim-blanked).
@@ -141,7 +141,8 @@ def rebuild_cyc(s, pre=1.5, post=2.5, blank=None):
     `s.dff` and guards both ends of the frame window (gen_stim_cyc only guards
     the upper end).
 
-    pre, post : seconds before / after visual onset to include in the window.
+    preStim, postStim : seconds before / after visual onset to include in the
+        window.
     blank : optional (t0, t1) in seconds relative to onset. When given, NaNs
         that fixed window on the rebuilt cyc — for a clean, onset-locked blank
         instead of the jittered pipeline one. None (default): no blanking, the
@@ -150,7 +151,7 @@ def rebuild_cyc(s, pre=1.5, post=2.5, blank=None):
     Sets and invalidates on `s`:
         s.cyc       <- the new (n_cells, n_stims, n_trials, width) array
         s.cyc_pre   <- pre-onset frame count (frames before onset in the window)
-        s.dur_resp  <- post (kept consistent with the new window for
+        s.dur_resp  <- postStim (kept consistent with the new window for
                        cyc_onset / cyc_response_windows fallbacks)
         s.resp = s.resps = s.resp_err = None   (stale: old cyc geometry)
         s.influence = None                      (stale: old cyc geometry)
@@ -160,12 +161,12 @@ def rebuild_cyc(s, pre=1.5, post=2.5, blank=None):
     Returns the new cyc.
     """
     fp = s.frame_period
-    cyc_pre = int(round(pre / fp))
-    stim_dur = int(round(post / fp))
+    cyc_pre = int(round(preStim / fp))
+    stim_dur = int(round(postStim / fp))
     if cyc_pre < 1 or stim_dur < 1:
         raise ValueError(
-            f'pre={pre}, post={post} must each be positive and >= one frame '
-            f'({fp:.4f}s) to build a non-empty cyc window.')
+            f'preStim={preStim}, postStim={postStim} must each be positive and '
+            f'>= one frame ({fp:.4f}s) to build a non-empty cyc window.')
     width = cyc_pre + stim_dur
 
     unique_stims = s.unique_stims
@@ -196,11 +197,11 @@ def rebuild_cyc(s, pre=1.5, post=2.5, blank=None):
 
     s.cyc = cyc
     s.cyc_pre = cyc_pre
-    s.dur_resp = post
+    s.dur_resp = postStim
     s.resp = s.resps = s.resp_err = None
     s.influence = None
     print(f'{s.exp_id}: rebuilt cyc, width={width} frames '
-          f'({width * fp:.3f}s = {cyc_pre} pre + {stim_dur} post), '
+          f'({width * fp:.3f}s = {cyc_pre} preStim + {stim_dur} postStim), '
           f'n_trials={n_trials}')
     return cyc
 

@@ -31,7 +31,7 @@ plot_avg_rois(dat,vmax_frac=0.6)
 
 # %%  rebuild cyc from raw dff (un-blanked, wider) and inspect it to pick windows
 # pre/post: seconds before/after stimulus onset to include in cyc (for plotting and response computation)
-rebuild_cyc(dat, pre=1, post=2);
+rebuild_cyc(dat, preStim=1, postStim=2);
 
 # trial-averaged time-varying responses (one or more cells)
 # always plots the full cyc window (as built by rebuild_cyc)
