@@ -35,7 +35,6 @@ print(f'{dat.exp_id}: {dat.n_rois} ROIs, '
 # show average image with ROI mask
 plot_avg_rois(dat,vmax_frac=0.6)
 
-
 # %% check for a spurious first TTL pair before building cyc
 if check_event_alignment(dat):
     dropFirstEvents(dat)
@@ -43,7 +42,10 @@ if check_event_alignment(dat):
 
 # %%  rebuild cyc from raw dff (un-blanked, wider) and inspect it to pick windows
 # pre/post: seconds before/after stimulus onset to include in cyc (for plotting and response computation)
-rebuild_cyc(dat, preStim=1, postStim=2);
+# offsetFrames: 0 -- photostim TTL sits exactly on the artifact trough; the
+# ~15 frame lead is the PMT shutter closing, not a timing error. Pass a negative
+# value (e.g. -15) to shift each trial's window earlier for testing.
+rebuild_cyc(dat, preStim=1, postStim=2, offsetFrames=-15);
 
 # trial-averaged time-varying responses (one or more cells)
 # always plots the full cyc window (as built by rebuild_cyc)

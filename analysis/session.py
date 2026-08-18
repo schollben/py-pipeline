@@ -20,6 +20,7 @@ class Session:
     frame_period: float
     dur_resp: float = None      # response window (s) used to build cyc; for onset fallback
     cyc_pre: int = None         # frames before onset in the cyc window (set by rebuild_cyc)
+    cyc_offset: int = 0         # frame offset applied to the alignment reference
     avg_image: np.ndarray = None
     mask2d: np.ndarray = None
     dff: np.ndarray = None
@@ -218,7 +219,7 @@ def dropFirstEvents(s):
           f'{len(s.stim_on_2p_frame)} presentations remain.')
 
 
-def rebuild_cyc(s, preStim=1.5, postStim=2.5, blank=None):
+def rebuild_cyc(s, preStim=1.5, postStim=2.5, blank=None, offsetFrames=0):
     """Replace s.cyc with a raw, un-blanked cyc built directly from s.dff.
 
     `s.cyc` (as loaded) is built upstream from `dff_nan` (photostim-blanked).
@@ -239,12 +240,30 @@ def rebuild_cyc(s, preStim=1.5, postStim=2.5, blank=None):
         that fixed window on the rebuilt cyc — for a clean, onset-locked blank
         instead of the jittered pipeline one. None (default): no blanking, the
         full raw trace is exposed.
+    offsetFrames : frames added to each trial's alignment reference, so a
+        NEGATIVE value moves the collected window BACK (earlier) in time;
+        offsetFrames=-15 collects each trial starting 15 frames before its
+        visual TTL. Default 0 — the verified-correct alignment; this is an
+        exploratory knob for testing alignment hypotheses or for a session whose
+        triggers genuinely are offset, not a correction.
+
+        For reference, measured on raw fluorescence (not dF/F) aligned to
+        photostim_2p_frame: F begins declining at rel -15 as the PMT shutter
+        closes, troughs exactly at rel 0 (the photostim frame), and recovers by
+        rel +10. So the ~15-frame lead ahead of the pulse is physical (shutter),
+        not a trigger error — the TTLs themselves are accurate, and preStim=1
+        already opens the window well before the shutter with room for clean
+        baseline.
+
+        Note the offset moves the window, not the artifact: shifting earlier
+        makes the artifact appear LATER in window coordinates.
 
     Sets and invalidates on `s`:
-        s.cyc       <- the new (n_cells, n_stims, n_trials, width) array
-        s.cyc_pre   <- pre-onset frame count (frames before onset in the window)
-        s.dur_resp  <- postStim (kept consistent with the new window for
-                       cyc_onset / cyc_response_windows fallbacks)
+        s.cyc        <- the new (n_cells, n_stims, n_trials, width) array
+        s.cyc_pre    <- pre-onset frame count (frames before onset in the window)
+        s.cyc_offset <- offsetFrames actually applied
+        s.dur_resp   <- postStim (kept consistent with the new window for
+                        cyc_onset / cyc_response_windows fallbacks)
         s.resp = s.resps = s.resp_err = None   (stale: old cyc geometry)
         s.influence = None                      (stale: old cyc geometry)
 
@@ -276,7 +295,8 @@ def rebuild_cyc(s, preStim=1.5, postStim=2.5, blank=None):
         if k >= n_trials:
             trial_count[ind] += 1
             continue
-        tt = np.arange(son[ii] - cyc_pre + 1, son[ii] + stim_dur + 1)
+        ref = son[ii] + offsetFrames
+        tt = np.arange(ref - cyc_pre + 1, ref + stim_dur + 1)
         if tt[0] >= 0 and tt[-1] < dff.shape[0]:
             cyc[:, ind, k, :] = dff[tt, :].T
         trial_count[ind] += 1
@@ -289,12 +309,14 @@ def rebuild_cyc(s, preStim=1.5, postStim=2.5, blank=None):
 
     s.cyc = cyc
     s.cyc_pre = cyc_pre
+    s.cyc_offset = offsetFrames
     s.dur_resp = postStim
     s.resp = s.resps = s.resp_err = None
     s.influence = None
     print(f'{s.exp_id}: rebuilt cyc, width={width} frames '
           f'({width * fp:.3f}s = {cyc_pre} preStim + {stim_dur} postStim), '
-          f'n_trials={n_trials}')
+          f'n_trials={n_trials}'
+          + (f', offsetFrames={offsetFrames}' if offsetFrames else ''))
     return cyc
 
 
