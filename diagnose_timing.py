@@ -4,7 +4,9 @@ import h5py
 import numpy as np
 import plotly.graph_objects as go
 
-FNAME = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/TSeries-07132025-1042-003.h5'
+dirLoc = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/' # update for your computer
+FNAME = dirLoc + 'TSeries-07132025-1042-003.h5'
+
 ROI = 10
 frameStart, frameEnd = 0, 1000
 

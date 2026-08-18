@@ -6,7 +6,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from analysis import (load_session, rebuild_cyc, compute_responses, plot_avg_rois,
+from analysis import (load_session, check_event_alignment, dropFirstEvents,
+                      rebuild_cyc, compute_responses, plot_avg_rois,
                       plot_stim_traces, plot_tuning_curves, compute_selectivity,
                       plot_preference_maps, describe_photostim_groups,
                       plot_photostim_group_heatmaps, plot_photostim_target_traces,
@@ -15,19 +16,30 @@ from analysis import (load_session, rebuild_cyc, compute_responses, plot_avg_roi
 
 sns.set_theme(context='notebook', style='white')
 
+################################################################
 
 # TEST: 07132025, good day for oricont and photostim
+
 folderName = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/'
+
 # FNAME = '/mnt/bigdata/PROCESSED/TSeries-07132025-1042-003.h5'
+
 FNAME = folderName + 'TSeries-07132025-1042-003.h5'
 
-dat = load_session(FNAME)
+################################################################
 
+dat = load_session(FNAME)
 print(f'{dat.exp_id}: {dat.n_rois} ROIs, '
       f'{len(dat.directions)} directions, {len(dat.contrasts)} contrasts')
 
 # show average image with ROI mask
 plot_avg_rois(dat,vmax_frac=0.6)
+
+
+# %% check for a spurious first TTL pair before building cyc
+if check_event_alignment(dat):
+    dropFirstEvents(dat)
+
 
 # %%  rebuild cyc from raw dff (un-blanked, wider) and inspect it to pick windows
 # pre/post: seconds before/after stimulus onset to include in cyc (for plotting and response computation)

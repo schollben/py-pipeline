@@ -4,9 +4,9 @@ import numpy as np
 import h5py
 
 _ARRAYS = ['avg_image', 'mask2d', 'dff', 'unique_stims', 'stim_id',
-           'stim_properties', 'stim_on_2p_frame', 'cyc', 'resp', 'resp_err',
-           'resps', 'is_soma', 'is_dendrite', 'is_spine', 'is_good_cell',
-           'target_number', 'target_trial', 'roi_photostim_group',
+           'stim_properties', 'stim_on_2p_frame', 'photostim_2p_frame', 'cyc',
+           'resp', 'resp_err', 'resps', 'is_soma', 'is_dendrite', 'is_spine',
+           'is_good_cell', 'target_number', 'target_trial', 'roi_photostim_group',
            'roi_photostim_point', 'markpoint_assigned_roi', 'opto_unique_ids']
 
 _BRUKER_ACQ_ARRAYS = ['markpoints_group_info', 'markpoints_laser_power',
@@ -27,6 +27,7 @@ class Session:
     stim_id: np.ndarray = None
     stim_properties: np.ndarray = None
     stim_on_2p_frame: np.ndarray = None
+    photostim_2p_frame: np.ndarray = None
     cyc: np.ndarray = None
     resp: np.ndarray = None
     resp_err: np.ndarray = None
@@ -52,6 +53,7 @@ class Session:
     fit_params: np.ndarray = None
     influence: dict = None
     _stim_table: np.ndarray = field(default=None, repr=False)
+    _events_dropped: bool = field(default=False, repr=False)
 
     @property
     def directions(self):
@@ -124,6 +126,96 @@ def cyc_onset(s):
     if not s.dur_resp:
         return 0
     return s.cyc.shape[3] - int(round(s.dur_resp / s.frame_period)) - 1
+
+
+def check_event_alignment(s, n_show=5):
+    """Diagnose whether the first visual/photostim TTL pair looks spurious.
+
+    Some sessions carry a spurious first trigger on both the visual and
+    photostim vrec channels — a known hardware artifact where the photostim
+    trigger fires in lockstep with the very first visual trigger, well before
+    the real trial train begins (the pipeline's own "drop erroneous first
+    trigger" check, bruker_pipeline.py:624, tests the gap in raw vrec seconds
+    and can fail to catch it). `target_number` is separately shifted by the
+    pipeline's `opto_offset_trigger` psychopy row-drop (bruker_pipeline.py:674),
+    which only ever applies to the photostim label columns — so when both
+    conditions are present, `stim_id` (visual) is off by one against the
+    untrimmed `stim_on_2p_frame`, while `target_number` (photostim) is already
+    correctly aligned to the untrimmed `photostim_2p_frame`. See `dropFirstEvents`.
+
+    Prints, from the 2P frame-index arrays (`stim_on_2p_frame`,
+    `photostim_2p_frame` — not the raw vrec/seconds triggers):
+        - target_number[0]: 1 = no psychopy row-offset applied, 2 = applied
+        - first `n_show` inter-event intervals for each stream
+        - first `n_show` values of photostim_2p_frame - stim_on_2p_frame
+        - first stim_on ITI vs the median of the rest (flagged if > 2x)
+
+    Returns True when dropFirstEvents(s) is recommended (target_number[0] == 2
+    and the first ITI is anomalous), else False. Returns False without printing
+    photostim-specific lines when the session has no photostim data.
+    """
+    son = s.stim_on_2p_frame
+    pf = s.photostim_2p_frame
+    tn = s.target_number
+    print(f'=== {s.exp_id}: event alignment check ===')
+
+    son_iti = np.diff(son)
+    print(f'  stim_on_2p_frame  first {n_show} ITIs (frames): {son_iti[:n_show]}')
+    median_iti = np.median(son_iti[1:]) if len(son_iti) > 1 else np.median(son_iti)
+    first_anomalous = bool(len(son_iti) and son_iti[0] > 2 * median_iti)
+    print(f'  first stim_on ITI = {son_iti[0]} frames vs median {median_iti:.0f} '
+          f'({"ANOMALOUS >2x" if first_anomalous else "normal"})')
+
+    if not s.has_photostim or tn is None or not len(tn):
+        print('  no photostim data in this session — skipping photostim checks.')
+        return False
+
+    offset_applied = tn[0] == 2
+    print(f'  target_number[0] = {tn[0]:g} '
+          f'({"psychopy row-offset already applied" if offset_applied else "no offset applied"})')
+    if pf is not None and len(pf) > 1:
+        pf_iti = np.diff(pf)
+        print(f'  photostim_2p_frame first {n_show} ITIs (frames): {pf_iti[:n_show]}')
+    if pf is not None and len(pf) and len(son):
+        n = min(len(son), len(pf))
+        print(f'  photostim - stim_on, first {n_show}: {(pf[:n] - son[:n])[:n_show]}')
+
+    recommend = bool(offset_applied and first_anomalous)
+    if recommend:
+        print('  [!] WARNING: first TTL pair looks spurious and target_number is '
+              'already offset -- run dropFirstEvents(s) before rebuild_cyc().')
+    return recommend
+
+
+def dropFirstEvents(s):
+    """Drop the spurious first visual+photostim TTL pair (see
+    `check_event_alignment`) and re-align every per-presentation array to match,
+    so no other function needs to know this happened.
+
+    `stim_on_2p_frame[0]` and `photostim_2p_frame[0]` are dropped (both
+    spurious). `stim_id`/`stim_properties` are truncated at the *end* — they
+    were never shifted, so once the leading TTL is gone they are exactly one
+    entry too long. `target_number`/`target_trial` are left unchanged: they are
+    already correctly aligned to the untrimmed `photostim_2p_frame` (verified
+    empirically — real-vs-sham response is inverted under any other pairing),
+    so dropping `photostim_2p_frame[0]` while keeping `target_number` as-is
+    reproduces that same correct pairing.
+
+    Mutates `s` in place. Raises if called twice on the same session.
+    """
+    if s._events_dropped:
+        raise ValueError(f'{s.exp_id}: dropFirstEvents already applied.')
+    n = len(s.stim_on_2p_frame) - 1
+    s.stim_on_2p_frame = s.stim_on_2p_frame[1:]
+    s.stim_id = s.stim_id[:n]
+    if s.stim_properties is not None:
+        s.stim_properties = s.stim_properties[:n]          # same rows dropped as stim_id
+    if s.photostim_2p_frame is not None and s.target_number is not None:
+        s.photostim_2p_frame = s.photostim_2p_frame[1:][:len(s.target_number)]
+    s.unique_stims = np.unique(s.stim_id)
+    s._events_dropped = True
+    print(f'{s.exp_id}: dropped spurious first TTL pair; '
+          f'{len(s.stim_on_2p_frame)} presentations remain.')
 
 
 def rebuild_cyc(s, preStim=1.5, postStim=2.5, blank=None):
