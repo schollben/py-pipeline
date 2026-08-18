@@ -35,6 +35,7 @@ print(f'{dat.exp_id}: {dat.n_rois} ROIs, '
 # show average image with ROI mask
 plot_avg_rois(dat,vmax_frac=0.6)
 
+
 # %% check for a spurious first TTL pair before building cyc
 if check_event_alignment(dat):
     dropFirstEvents(dat)
@@ -42,22 +43,24 @@ if check_event_alignment(dat):
 
 # %%  rebuild cyc from raw dff (un-blanked, wider) and inspect it to pick windows
 # pre/post: seconds before/after stimulus onset to include in cyc (for plotting and response computation)
-# offsetFrames: 0 -- photostim TTL sits exactly on the artifact trough; the
-# ~15 frame lead is the PMT shutter closing, not a timing error. Pass a negative
-# value (e.g. -15) to shift each trial's window earlier for testing.
-rebuild_cyc(dat, preStim=1, postStim=2, offsetFrames=-15);
+# offsetFrames: move the window earlier/later by this many frames (can be negative)
+# for example TSeries-07132025-1042-003.h5 appears to have a ~15 frame lead in the event timing (PMT shutter begins BEFORE stimulus, which is not possible)
+
+rebuild_cyc(dat, preStim=0.5, postStim=2, offsetFrames=-15);
 
 # trial-averaged time-varying responses (one or more cells)
 # always plots the full cyc window (as built by rebuild_cyc)
-plot_stim_traces(dat, [1,5,10,15,20],
+plot_stim_traces(dat, [1,2,10,15,20],
                  mask_artifact=False,
-                 baseline_subtract=False,
+                 baseline_subtract=True,
                  trials='sham');
 
-# recompute peak-minus-baseline responses from cyc: the pipeline's FFT-based
-# resp/resps are all-NaN for opto sessions (FFT propagates the photostim blank).
-# baseline/peak: windows read off the plot above (seconds relative to onset).
-compute_responses(dat, baseline=(-1.0, -0.5), peak=(0.4, 1.2));
+# recompute peak-minus-baseline responses from cyc
+# baseline/peak: windows read off the plot above, in seconds from the START of
+# the cyc window (t=0 is the left edge of the plot). With preStim=0.5, postStim=2
+# the window spans 0 -> 2.5 s and visual onset sits at 0.5 s.
+# note -- eventually this will fixed once we understand the issues
+compute_responses(dat, baseline=(0, 0.4), peak=(1.5, 2));
 
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit)
@@ -79,12 +82,12 @@ plot_photostim_target_traces(dat, window=(-0.5, 1.5));
 
 
 # %% 7. influence: grand average across all stimulus conditions
-influence_grand(dat, baseline=(-1.0, -0.5), peak=(0.4, 1.2));
+influence_grand(dat, baseline=(0, 0.4), peak=(0.9, 1.7));
 plot_influence_maps(dat);
 
 
 # %% 8. influence maps by stimulus contrast
-influence_by_stim(dat, baseline=(-1.0, -0.5), peak=(0.4, 1.2));
+influence_by_stim(dat, baseline=(0, 0.4), peak=(0.9, 1.7));
 plot_influence_by_contrast(dat);
 
 

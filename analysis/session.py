@@ -342,10 +342,15 @@ def cyc_response_windows(s, baseline_guard_sec=0.5, post_sec=1.0,
     so it is meant to keep state self-consistent, not to be the final
     measurement; pass explicit `baseline=`/`peak=` for that.
 
-    baseline, peak : optional (t0, t1) in seconds relative to onset. When given,
-        overrides the auto-derived window for that slice (converted via
-        `cyc_onset` + `frame_period`). Independent partial override allowed
-        (e.g. pass only `peak=`).
+    baseline, peak : optional (t0, t1) in seconds from the START of the cyc
+        window (not from onset). t=0 is the first frame of cyc; the window runs
+        to `cyc.shape[3] * frame_period`. For a cyc built with
+        `rebuild_cyc(preStim=1, postStim=2)` the window spans 0 -> 3.0 s with
+        visual onset at 1.0 s, so `baseline=(0, 0.5)` is the first half-second
+        and `peak=(1.4, 2.2)` is 0.4-1.2 s after onset. When given, overrides
+        the auto-derived window for that slice. Independent partial override
+        allowed (e.g. pass only `peak=`). Raises ValueError if the requested
+        span falls outside the cyc window or is empty.
 
     Returns (base_slice, peak_slice).
     """
@@ -366,18 +371,34 @@ def cyc_response_windows(s, baseline_guard_sec=0.5, post_sec=1.0,
         peak_sl = slice(onset, min(width, onset + post))
 
     if baseline is not None:
-        onset = cyc_onset(s)
-        t0, t1 = baseline
-        f0 = int(np.clip(onset + round(t0 / s.frame_period), 0, width))
-        f1 = int(np.clip(onset + round(t1 / s.frame_period), f0 + 1, width))
-        base_sl = slice(f0, f1)
+        base_sl = _window_slice(s, baseline, width, 'baseline')
     if peak is not None:
-        onset = cyc_onset(s)
-        t0, t1 = peak
-        f0 = int(np.clip(onset + round(t0 / s.frame_period), 0, width))
-        f1 = int(np.clip(onset + round(t1 / s.frame_period), f0 + 1, width))
-        peak_sl = slice(f0, f1)
+        peak_sl = _window_slice(s, peak, width, 'peak')
     return base_sl, peak_sl
+
+
+def _window_slice(s, span, width, name):
+    """(t0, t1) seconds from cyc-window start -> frame slice, bounds-checked."""
+    t0, t1 = span
+    fp = s.frame_period
+    dur = width * fp
+    if t0 >= t1:
+        raise ValueError(
+            f'{name}={span}: t0 must be less than t1 (seconds from the start '
+            f'of the cyc window).')
+    if t0 < 0 or t1 > dur:
+        raise ValueError(
+            f'{name}={span} falls outside the cyc window, which spans '
+            f'0 to {dur:.3f}s ({width} frames at {fp:.4f}s). Note these are '
+            f'seconds from the START of the window, not from onset '
+            f'(onset is at {cyc_onset(s) * fp:.3f}s).')
+    f0 = int(round(t0 / fp))
+    f1 = int(round(t1 / fp))
+    if f1 <= f0:
+        raise ValueError(
+            f'{name}={span} is shorter than one frame ({fp:.4f}s) and selects '
+            f'no data.')
+    return slice(f0, min(f1, width))
 
 
 def resp_grid(s, cell):

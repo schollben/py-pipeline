@@ -226,7 +226,7 @@ def influence_grand(s, baseline_guard_sec=0.5, post_sec=1.0,
     Per-trial responses come from `group_trial_resp` (peak-minus-baseline
     computed per trial, not on the trial-averaged trace — see that function's
     docstring for why). Baseline / peak windows come from `cyc_response_windows`;
-    pass explicit `baseline=`/`peak=` (seconds relative to onset) for windows read
+    pass explicit `baseline=`/`peak=` (seconds from the start of the cyc window) for windows read
     off a `rebuild_cyc`-produced cyc.
 
     Sets s.influence = {real_tn: {'grand': (n_cells,), 'kind': 'grand'}} and

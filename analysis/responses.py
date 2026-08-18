@@ -17,9 +17,11 @@ def compute_responses(s, baseline_guard_sec=0.5, post_sec=1.0,
         response = max(cyc over post-blank peak window) - mean(cyc over baseline)
 
     with windows from `cyc_response_windows` (baseline before the artifact, peak
-    after the blank). `baseline`/`peak` are optional (t0, t1) sec-relative-to-onset
-    overrides passed through to `cyc_response_windows` (e.g. windows read off a
-    `rebuild_cyc`-produced cyc). Sets and returns s.resp; also sets s.resps,
+    after the blank). `baseline`/`peak` are optional (t0, t1) overrides in
+    seconds from the START of the cyc window, passed through to
+    `cyc_response_windows` (e.g. windows read off a `rebuild_cyc`-produced cyc;
+    with preStim=1, postStim=2 the window spans 0 -> 3.0 s and onset is at
+    1.0 s). Sets and returns s.resp; also sets s.resps,
     s.resp_err. Shapes match the pipeline's: resp/resp_err (n_cells, n_stims),
     resps (n_cells, n_stims, n_trials).
     """
