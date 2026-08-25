@@ -1,11 +1,10 @@
 # %% initialize
-
 %load_ext autoreload
 %autoreload 2
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-
+sns.set_theme(context='notebook', style='white')
 from analysis import (load_session, check_event_alignment, dropFirstEvents,
                       rebuild_cyc, compute_responses, plot_avg_rois,
                       plot_stim_traces, plot_tuning_curves, compute_selectivity,
@@ -13,8 +12,6 @@ from analysis import (load_session, check_event_alignment, dropFirstEvents,
                       plot_photostim_group_heatmaps, plot_photostim_target_traces,
                       influence_grand, influence_by_stim, influence_bootstrap,
                       plot_influence_maps, plot_influence_by_contrast)
-
-sns.set_theme(context='notebook', style='white')
 
 ################################################################
 
