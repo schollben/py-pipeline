@@ -49,6 +49,8 @@ class Session:
     markpoints_condition_idx: np.ndarray = None
     # derived (filled by tools)
     pref_dir: np.ndarray = None
+    snr: np.ndarray = None
+    pref_stim: np.ndarray = None
     gdsi: np.ndarray = None
     gosi: np.ndarray = None
     fit_params: np.ndarray = None

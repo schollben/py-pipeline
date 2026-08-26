@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 sns.set_theme(context='notebook', style='white')
 from analysis import (load_session, check_event_alignment, dropFirstEvents,
-                      rebuild_cyc, compute_responses, plot_avg_rois,
+                      rebuild_cyc, compute_responses, compute_snr,plot_avg_rois,
                       plot_stim_traces, plot_tuning_curves, compute_selectivity,
                       plot_preference_maps, describe_photostim_groups,
                       plot_photostim_group_heatmaps, plot_photostim_target_traces,
@@ -58,7 +58,7 @@ plot_stim_traces(dat, [1,2,10,15,20],
 baseline=(0, 0.25) # this cooresponds to the pre-stimulus period
 peak=(1.15, 1.4)
 compute_responses(dat, baseline=baseline, peak=peak);
-
+compute_snr(dat, baseline=baseline, peak=peak);
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit) + preference map
 # and compute direction / orientation selectivit
@@ -79,8 +79,9 @@ plot_photostim_target_traces(dat, baseline=baseline, peak=peak);
 # %% 5. influence: grand average across all stimulus conditions
 # windows are inherited from compute_responses above (via dat.resps), so influence
 # and resp always measure the same thing; pass baseline=/peak= here only to override (not recommended)
-influence_grand(dat);
+influence_grand(dat,good_only=True,mode='diff');
 plot_influence_maps(dat);
+
 
 
 # %% 6. influence maps by stimulus contrast

@@ -330,14 +330,20 @@ def _influence_trial_resps(s, baseline_guard_sec, post_sec, baseline, peak):
 
 
 def influence_grand(s, baseline_guard_sec=None, post_sec=None,
-                    baseline=None, peak=None):
+                    baseline=None, peak=None, mode='ratio', good_only=True):
     """Grand-average influence of each target group on all nontargets.
 
     Diagnostic entry point: pools every trial of the real group and every trial
     of its paired sham (across all stimulus conditions), takes the mean of each,
     and forms:
 
-        influence[cell] = (mean(resp_real) - mean(resp_sham)) / mean(resp_sham)
+        mode='ratio' (default):
+            influence[cell] = (mean(resp_real) - mean(resp_sham)) / mean(resp_sham)
+        mode='diff':
+            influence[cell] =  mean(resp_real) - mean(resp_sham)
+
+    'diff' stays in dF/F units and has no denominator, so it avoids the very
+    large values 'ratio' produces for cells whose sham response is near zero.
 
     Per-trial responses default to `s.resps` from `compute_responses`, so influence
     is measured over exactly the same baseline/peak windows as `resp` — run
@@ -345,9 +351,21 @@ def influence_grand(s, baseline_guard_sec=None, post_sec=None,
     `baseline`/`peak`/`baseline_guard_sec`/`post_sec` overrides that and recomputes
     from `s.cyc` with those windows (seconds from the start of the cyc window).
 
-    Sets s.influence = {real_tn: {'grand': (n_cells,), 'kind': 'grand'}} and
-    returns the same dict.
+    good_only : set the influence of cells failing `s.is_good_cell` to NaN, so
+        low-SNR cells are excluded from the maps and summary statistics. Run
+        `compute_snr(...)` first to reassign that flag from the responses;
+        without it the pipeline's skewness-based flag is used. Pass False to
+        keep every cell.
+
+    Sets s.influence = {real_tn: {'grand': (n_cells,), 'kind': 'grand',
+    'mode': mode}} and returns the same dict.
     """
+    if mode not in ('ratio', 'diff'):
+        raise ValueError("mode must be 'ratio' or 'diff'")
+    if good_only and s.is_good_cell is None:
+        raise ValueError(
+            f'{s.exp_id}: good_only=True but the session has no is_good_cell '
+            f'flag; run compute_snr(...) first or pass good_only=False.')
     gmap = photostim_group_map(s)
     grp = cyc_trial_group(s)
     resps, base_sl, peak_sl = _influence_trial_resps(
@@ -359,10 +377,15 @@ def influence_grand(s, baseline_guard_sec=None, post_sec=None,
         resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl, resps)
         mean_real = np.nanmean(resp_real, axis=(1, 2))    # (n_cells,)
         mean_sham = np.nanmean(resp_sham, axis=(1, 2))    # (n_cells,)
-        with np.errstate(invalid='ignore', divide='ignore'):
-            grand = np.where(np.abs(mean_sham) > 1e-6,
-                             (mean_real - mean_sham) / mean_sham, np.nan)
-        influence[real_tn] = dict(grand=grand, kind='grand')
+        if mode == 'diff':
+            grand = mean_real - mean_sham
+        else:
+            with np.errstate(invalid='ignore', divide='ignore'):
+                grand = np.where(np.abs(mean_sham) > 1e-6,
+                                 (mean_real - mean_sham) / mean_sham, np.nan)
+        if good_only:
+            grand = np.where(np.asarray(s.is_good_cell, dtype=bool), grand, np.nan)
+        influence[real_tn] = dict(grand=grand, kind='grand', mode=mode)
 
     s.influence = influence
     return influence
@@ -587,7 +610,10 @@ def plot_influence_maps(s, influence=None, show_image=False, vlim=None):
                                  vlim=vlim, show_image=show_image, colorbar=False)
     fig.suptitle(f'{s.exp_id}  |  influence (grand mean across stims)')
     fig.tight_layout()
-    fig.colorbar(sm, ax=axes[0].tolist(), fraction=0.046, label='influence')
+    modes = {influence[tn].get('mode', 'ratio') for tn in real_groups}
+    lbl = ('influence (dF/F, real - sham)' if modes == {'diff'}
+           else 'influence ((real - sham) / sham)')
+    fig.colorbar(sm, ax=axes[0].tolist(), fraction=0.046, label=lbl)
     return fig
 
 
