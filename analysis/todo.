@@ -20,27 +20,3 @@ typically we have 3 contrasts (0, low, high).
 
 this needs to be well organized code and simple clear functions. we will likely need to add or adapt later on. 
 ask questions to gain clarifications for planning.
-
-
-_____
-
-
-Cell 6	✅ Fully — including the coolwarm map, purple target markers, side-by-side subplots, and the exact 3 modes requested
-#2 compute influence (photostim − sham)/sham from peak responses, careful group/sham pairing; grand-mean spatial map, PRGn, purple target outline / gray nontarget outline, facecolor by influence	
-
-Cell 7	✅ Fully — including the peak-not-cyc response, the group-ID/sham-pairing care the todo flagged, PRGn, and the outline color scheme
-#3 per-group influence vs. stimulus contrast (ignoring orientation/direction), typically 3 contrasts	
-
-Cell 8	✅ Fully — contrast-split grid
-A few notes worth flagging:
-
-The implementation went beyond the todo in one spot the todo explicitly worried about: item #2 warned "be careful about the group IDs in markpoints and the number of unique group IDs." 
-That concern is directly addressed by photostim_group_map 
-(offset derivation, sham pairing) and the empirically-verified trial alignment documented in cyc_trial_group (photostim.py:69-94).
-
-The todo asked for target cells denoted by "an outline or a purple dot." Both plots satisfy this — heatmaps use the purple dot, spatial maps use the purple outline.
-
-The todo's closing line ("ask questions to gain clarifications for planning") suggests this was scoped as a plan-first task; the code as written already covers all three items, 
-so it looks like the work was carried through rather than left at planning.
-So: this is a completed (or near-completed) implementation of exactly the three-item todo you started a month ago.
-

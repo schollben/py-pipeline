@@ -497,8 +497,19 @@ def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
     return influence
 
 
-def _draw_influence_map(ax, s, grand_influence, target_rois, title, vlim=None):
-    """Facecolor-by-influence overlay: PRGn fill for nontargets, purple/gray outlines."""
+def _draw_influence_map(ax, s, grand_influence, target_rois, title, vlim=None,
+                        show_image=True, colorbar=True):
+    """Facecolor-by-influence overlay: PRGn fill for nontargets, black dashed
+    outlines for targets, gray for nontargets.
+
+    show_image : draw the average 2P image behind the ROIs. False leaves a blank
+        background (ROI outlines and influence fills only).
+    colorbar : attach a colorbar to this axis. False when the caller draws a
+        single shared colorbar for the whole figure.
+
+    Returns the ScalarMappable used for the fills, so a caller can build a shared
+    colorbar from it.
+    """
     if vlim is None:
         vlim = np.nanpercentile(np.abs(grand_influence), 99)
         if not np.isfinite(vlim) or vlim == 0:
@@ -506,14 +517,23 @@ def _draw_influence_map(ax, s, grand_influence, target_rois, title, vlim=None):
     norm = TwoSlopeNorm(vmin=-vlim, vcenter=0, vmax=vlim)
     cmap = plt.get_cmap('PRGn')
 
-    ax.imshow(s.avg_image, cmap='gray', vmax=s.avg_image.max() / 2)
+    if show_image:
+        ax.imshow(s.avg_image, cmap='gray', vmax=s.avg_image.max() / 2)
+    else:
+        # no background image to set the extent/orientation, so pin them to the
+        # frame ourselves and keep imshow's top-left origin for the overlays
+        ny, nx = s.avg_image.shape
+        ax.set_xlim(-0.5, nx - 0.5)
+        ax.set_ylim(ny - 0.5, -0.5)
+        ax.set_aspect('equal')
     is_target = np.zeros(s.n_rois, dtype=bool)
     is_target[target_rois] = True
 
     for cc in range(s.n_rois):
         m = s.mask2d[cc] > 0.5
         if is_target[cc]:
-            ax.contour(s.mask2d[cc], levels=[0.5], colors=[_TARGET_COLOR], linewidths=1.2)
+            ax.contour(s.mask2d[cc], levels=[0.5], colors=['black'],
+                       linewidths=1.2, linestyles='dashed')
             continue
         ax.contour(s.mask2d[cc], levels=[0.5], colors=[_NONTARGET_COLOR], linewidths=0.6)
         val = grand_influence[cc]
@@ -526,11 +546,22 @@ def _draw_influence_map(ax, s, grand_influence, target_rois, title, vlim=None):
     ax.set_title(title)
     ax.axis('off')
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    plt.colorbar(sm, ax=ax, fraction=0.046, label='influence')
+    if colorbar:
+        plt.colorbar(sm, ax=ax, fraction=0.046, label='influence')
+    return sm
 
 
-def plot_influence_maps(s, influence=None):
-    """One spatial influence map per real photostim group (grand mean across stims)."""
+def plot_influence_maps(s, influence=None, show_image=False, vlim=None):
+    """One spatial influence map per real photostim group (grand mean across stims).
+
+    All groups share one symmetric colour scale and one figure-level colorbar, so
+    fills are directly comparable across subplots.
+
+    show_image : draw the average 2P image behind the ROIs (default False —
+        blank background, ROI outlines and influence fills only).
+    vlim : symmetric colour limit (+/- vlim). None (default) uses the 99th
+        percentile of |influence| pooled over every group.
+    """
     if influence is None:
         if s.influence is None:
             raise ValueError(
@@ -540,13 +571,23 @@ def plot_influence_maps(s, influence=None):
     gmap = photostim_group_map(s)
     real_groups = sorted(influence.keys())
 
+    # one symmetric scale pooled over every group so subplots are comparable
+    if vlim is None:
+        allvals = np.concatenate([np.asarray(influence[tn]['grand']).ravel()
+                                  for tn in real_groups])
+        vlim = np.nanpercentile(np.abs(allvals), 99)
+        if not np.isfinite(vlim) or vlim == 0:
+            vlim = 1.0
+
     fig, axes = plt.subplots(1, len(real_groups),
                               figsize=(6 * len(real_groups), 6), squeeze=False)
     for ax, real_tn in zip(axes[0], real_groups):
-        _draw_influence_map(ax, s, influence[real_tn]['grand'],
-                            gmap[real_tn]['target_rois'], f'group {real_tn:g}')
+        sm = _draw_influence_map(ax, s, influence[real_tn]['grand'],
+                                 gmap[real_tn]['target_rois'], f'group {real_tn:g}',
+                                 vlim=vlim, show_image=show_image, colorbar=False)
     fig.suptitle(f'{s.exp_id}  |  influence (grand mean across stims)')
     fig.tight_layout()
+    fig.colorbar(sm, ax=axes[0].tolist(), fraction=0.046, label='influence')
     return fig
 
 

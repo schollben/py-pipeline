@@ -70,7 +70,6 @@ plot_preference_maps(dat, thr=0.1);
 
 
 # %% 4. photostimulation group dF/F activity
-# plot_photostim_group_heatmaps(dat,baseline=baseline, peak=peak, mode='raw');
 
 describe_photostim_groups(dat)
 
@@ -79,7 +78,7 @@ plot_photostim_target_traces(dat, baseline=baseline, peak=peak);
 
 # %% 5. influence: grand average across all stimulus conditions
 # windows are inherited from compute_responses above (via dat.resps), so influence
-# and resp always measure the same thing; pass baseline=/peak= here only to override
+# and resp always measure the same thing; pass baseline=/peak= here only to override (not recommended)
 influence_grand(dat);
 plot_influence_maps(dat);
 
@@ -89,8 +88,10 @@ influence_by_stim(dat);
 plot_influence_by_contrast(dat);
 
 
-# %% 7. bootstrap influence (mean/SEM/CI over resampled trials)
+# %%
+
+
+
+# %% bootstrap influence (mean/SEM/CI over resampled trials)
 influence_bootstrap(dat, by='grand', n_boot=1000, seed=0);
 {tn: (v['grand'], v['sem']) for tn, v in dat.influence.items()}
-
-
