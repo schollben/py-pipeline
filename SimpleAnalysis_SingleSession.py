@@ -71,16 +71,14 @@ plot_preference_maps(dat, thr=0.1);
 
 
 # %% 4. photostimulation group dF/F activity
-
 describe_photostim_groups(dat)
-
 plot_photostim_target_traces(dat, baseline=baseline, peak=peak);
 
 
 # %% 5. influence: grand average across all stimulus conditions
 # windows are inherited from compute_responses above (via dat.resps), so influence
 # and resp always measure the same thing; pass baseline=/peak= here only to override (not recommended)
-influence_grand(dat,good_only=True,mode='diff');
+influence_grand(dat, good_only=True, mode='dprime'); # mode: diff or dprime
 plot_influence_maps(dat);
 
 

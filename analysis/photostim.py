@@ -330,20 +330,26 @@ def _influence_trial_resps(s, baseline_guard_sec, post_sec, baseline, peak):
 
 
 def influence_grand(s, baseline_guard_sec=None, post_sec=None,
-                    baseline=None, peak=None, mode='ratio', good_only=True):
+                    baseline=None, peak=None, mode='dprime', good_only=True,
+                    clip_sham=True):
     """Grand-average influence of each target group on all nontargets.
 
     Diagnostic entry point: pools every trial of the real group and every trial
     of its paired sham (across all stimulus conditions), takes the mean of each,
     and forms:
 
-        mode='ratio' (default):
-            influence[cell] = (mean(resp_real) - mean(resp_sham)) / mean(resp_sham)
+        mode='dprime' (default):
+            influence[cell] = (mean(resp_real) - mean(resp_sham))
+                              / sqrt((var(resp_real) + var(resp_sham)) / 2)
         mode='diff':
             influence[cell] =  mean(resp_real) - mean(resp_sham)
 
-    'diff' stays in dF/F units and has no denominator, so it avoids the very
-    large values 'ratio' produces for cells whose sham response is near zero.
+    'dprime' is a standardised effect size: the real-minus-sham difference in
+    units of the pooled trial-to-trial SD. The denominator is a variance, so it
+    is always positive and never near zero — unlike normalising by the sham mean,
+    which is statistically indistinguishable from zero for most cells and
+    produces both huge values and spurious sign flips. 'diff' is the same
+    numerator left in dF/F units, for when absolute magnitude matters.
 
     Per-trial responses default to `s.resps` from `compute_responses`, so influence
     is measured over exactly the same baseline/peak windows as `resp` — run
@@ -351,6 +357,11 @@ def influence_grand(s, baseline_guard_sec=None, post_sec=None,
     `baseline`/`peak`/`baseline_guard_sec`/`post_sec` overrides that and recomputes
     from `s.cyc` with those windows (seconds from the start of the cyc window).
 
+    clip_sham : floor a negative `mean(resp_sham)` at 0 before taking the
+        difference. A sham (0 mW) response should not be negative; where it is,
+        it is noise around a true zero, so flooring it stops that noise adding
+        to the real-minus-sham difference. Applies to both modes, since both
+        share the same numerator. Pass False to use the raw sham mean.
     good_only : set the influence of cells failing `s.is_good_cell` to NaN, so
         low-SNR cells are excluded from the maps and summary statistics. Run
         `compute_snr(...)` first to reassign that flag from the responses;
@@ -360,8 +371,8 @@ def influence_grand(s, baseline_guard_sec=None, post_sec=None,
     Sets s.influence = {real_tn: {'grand': (n_cells,), 'kind': 'grand',
     'mode': mode}} and returns the same dict.
     """
-    if mode not in ('ratio', 'diff'):
-        raise ValueError("mode must be 'ratio' or 'diff'")
+    if mode not in ('dprime', 'diff'):
+        raise ValueError("mode must be 'dprime' or 'diff'")
     if good_only and s.is_good_cell is None:
         raise ValueError(
             f'{s.exp_id}: good_only=True but the session has no is_good_cell '
@@ -377,12 +388,23 @@ def influence_grand(s, baseline_guard_sec=None, post_sec=None,
         resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl, resps)
         mean_real = np.nanmean(resp_real, axis=(1, 2))    # (n_cells,)
         mean_sham = np.nanmean(resp_sham, axis=(1, 2))    # (n_cells,)
+        if clip_sham:
+            # a negative sham response is not physical; for these cells the sham
+            # is statistically indistinguishable from zero, so floor it there
+            # rather than let noise inflate the real-minus-sham difference.
+            mean_sham = np.where(mean_sham < 0, 0.0, mean_sham)
         if mode == 'diff':
             grand = mean_real - mean_sham
         else:
+            # pooled trial-to-trial SD; trials of every stim pooled per cell
+            flat_real = resp_real.reshape(s.n_rois, -1)
+            flat_sham = resp_sham.reshape(s.n_rois, -1)
+            var_real = np.nanvar(flat_real, axis=1, ddof=1)
+            var_sham = np.nanvar(flat_sham, axis=1, ddof=1)
+            pooled_sd = np.sqrt((var_real + var_sham) / 2)
             with np.errstate(invalid='ignore', divide='ignore'):
-                grand = np.where(np.abs(mean_sham) > 1e-6,
-                                 (mean_real - mean_sham) / mean_sham, np.nan)
+                grand = np.where(pooled_sd > 0,
+                                 (mean_real - mean_sham) / pooled_sd, np.nan)
         if good_only:
             grand = np.where(np.asarray(s.is_good_cell, dtype=bool), grand, np.nan)
         influence[real_tn] = dict(grand=grand, kind='grand', mode=mode)
@@ -610,9 +632,9 @@ def plot_influence_maps(s, influence=None, show_image=False, vlim=None):
                                  vlim=vlim, show_image=show_image, colorbar=False)
     fig.suptitle(f'{s.exp_id}  |  influence (grand mean across stims)')
     fig.tight_layout()
-    modes = {influence[tn].get('mode', 'ratio') for tn in real_groups}
+    modes = {influence[tn].get('mode', 'dprime') for tn in real_groups}
     lbl = ('influence (dF/F, real - sham)' if modes == {'diff'}
-           else 'influence ((real - sham) / sham)')
+           else "influence (d', pooled SD)")
     fig.colorbar(sm, ax=axes[0].tolist(), fraction=0.046, label=lbl)
     return fig
 
