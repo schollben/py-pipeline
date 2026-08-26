@@ -557,7 +557,8 @@ def plot_influence_by_contrast(s, influence=None):
 
 def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
                                  post_sec=1.0, baseline=None, peak=None,
-                                 show_windows=True, ymin=-0.05):
+                                 show_windows=True, ymin=-0.05,
+                                 baseline_subtract=True):
     """Trial-averaged cyc timecourse of each targeted ROI, real vs sham.
 
     Grid of line plots: one row per real photostim group/ensemble, one column per
@@ -579,6 +580,10 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
         windows behind each trace.
     ymin : lower y-axis limit for every subplot (upper limit autoscales);
         None leaves the y-axis fully autoscaled.
+    baseline_subtract : subtract each trial's own mean over the `baseline` slice
+        before averaging, matching what `compute_responses` measures (per-trial,
+        not per-averaged-trace). Removes the dF/F offset and shrinks the SEM band
+        by the amount of across-trial baseline drift.
     """
     if not s.has_photostim:
         print(f'{s.exp_id}: no photostimulation data in this session.')
@@ -610,6 +615,8 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
     def mean_sem(roi, target_tn):
         si, ti = np.where(grp == target_tn)
         tr = s.cyc[roi, si, ti, :]                       # (n_sel, n_frames)
+        if baseline_subtract:
+            tr = tr - np.nanmean(tr[:, base_sl], axis=1, keepdims=True)
         mean = np.nanmean(tr, axis=0)
         n = max(np.sum(~np.isnan(tr[:, 0])), 1)
         sem = np.nanstd(tr, axis=0) / np.sqrt(n)

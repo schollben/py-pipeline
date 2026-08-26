@@ -49,13 +49,13 @@ rebuild_cyc(dat, preStim=0.25, postStim=2, offsetFrames=-15);
 plot_stim_traces(dat, [1,2,10,15,20],
                  mask_artifact=False,
                  baseline_subtract=True,
-                 trials='sham');
+                 trials='all');
 
 # recompute peak-minus-baseline responses from cyc
 # baseline/peak: windows read off the plot above, in seconds from the START of the cyc window (t=0 is the left edge of the plot)
 # With preStim=0.25, postStim=2 the window spans 0 -> 2.25 s and visual onset sits at 0.25 s.
 # note -- eventually this will fixed once we understand the issues
-baseline=(0, 0.25)
+baseline=(0, 0.25) # this cooresponds to the pre-stimulus period
 peak=(1.15, 1.4)
 compute_responses(dat, baseline=baseline, peak=peak);
 
