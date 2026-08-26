@@ -557,7 +557,7 @@ def plot_influence_by_contrast(s, influence=None):
 
 def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
                                  post_sec=1.0, baseline=None, peak=None,
-                                 show_windows=True):
+                                 show_windows=True, ymin=-0.05):
     """Trial-averaged cyc timecourse of each targeted ROI, real vs sham.
 
     Grid of line plots: one row per real photostim group/ensemble, one column per
@@ -577,6 +577,8 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
         `compute_responses` so the plot shows what was actually measured.
     show_windows : shade the baseline (gray) and peak (yellow) measurement
         windows behind each trace.
+    ymin : lower y-axis limit for every subplot (upper limit autoscales);
+        None leaves the y-axis fully autoscaled.
     """
     if not s.has_photostim:
         print(f'{s.exp_id}: no photostimulation data in this session.')
@@ -637,6 +639,8 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
                                 color=color, alpha=0.2, lw=0)
             ax.axvline(onset * fp, color='black', lw=0.8, ls='--')
             ax.set_xlim(f0 * fp, (f1 - 1) * fp)
+            if ymin is not None:
+                ax.set_ylim(bottom=ymin)
             ax.set_title(f'grp {real_tn:g} · ROI {roi}', fontsize=8)
             if col == 0:
                 ax.set_ylabel(f'group {real_tn:g}\ndF/F', fontsize=8)
