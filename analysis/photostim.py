@@ -168,11 +168,23 @@ def describe_photostim_groups(s):
               f'trials: real={n_real} sham={n_sham}')
 
 
-def plot_photostim_group_heatmaps(s, mode='raw'):
+def plot_photostim_group_heatmaps(s, mode='raw', baseline_guard_sec=0.5,
+                                  post_sec=1.0, baseline=None, peak=None,
+                                  baseline_subtract=True, mask_artifact=True):
     """Trial-averaged per-cell activity heatmap for each real photostim group.
 
     mode: 'raw' (cell-by-cell trial average), 'norm' (per-cell peak-normalized),
     or 'zscore' (per-cell z-scored across time).
+
+    baseline_guard_sec, post_sec, baseline, peak : identical to
+        `compute_responses` / `cyc_response_windows` — pass the same values you
+        passed to `compute_responses` so the heatmap shows what was measured.
+    baseline_subtract : subtract each trial's own mean over the `baseline` slice
+        before averaging (per-trial, as `compute_responses` does), so each cell's
+        dF/F offset is removed and the colour scale reflects evoked change.
+    mask_artifact : NaN the frames between the end of the baseline window and the
+        start of the peak window (the photostim artifact + blank span) so they are
+        drawn as gray and excluded from the norm/zscore statistics.
     """
     if mode not in ('raw', 'norm', 'zscore'):
         raise ValueError("mode must be 'raw', 'norm', or 'zscore'")
@@ -182,6 +194,12 @@ def plot_photostim_group_heatmaps(s, mode='raw'):
     real_groups = sorted(gmap.keys())
     n_frames = s.cyc.shape[3]
     pre_frames = int(round(1.0 / s.frame_period)) if s.frame_period else 0
+    base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec,
+                                            baseline, peak)
+
+    art = np.zeros(n_frames, dtype=bool)
+    if mask_artifact:
+        art[base_sl.stop:peak_sl.start] = True
 
     fig, axes = plt.subplots(1, len(real_groups),
                               figsize=(6 * len(real_groups), 8), squeeze=False)
@@ -191,7 +209,11 @@ def plot_photostim_group_heatmaps(s, mode='raw'):
         mask = grp == real_tn
         stim_idx, trial_idx = np.where(mask)
         traces = s.cyc[:, stim_idx, trial_idx, :]        # (n_cells, n_sel, n_frames)
+        if baseline_subtract:
+            traces = traces - np.nanmean(traces[:, :, base_sl], axis=2,
+                                         keepdims=True)
         avg = np.nanmean(traces, axis=1)                 # (n_cells, n_frames)
+        avg[:, art] = np.nan
 
         is_target = np.zeros(s.n_rois, dtype=bool)
         is_target[target_rois] = True
@@ -199,9 +221,10 @@ def plot_photostim_group_heatmaps(s, mode='raw'):
         avg_sorted = avg[order]
         is_target_sorted = is_target[order]
 
-        # frames fully NaN across all cells = the photostim-pulse blanking window;
-        # exclude them from norm/zscore statistics so the artifact-adjacent dip
-        # doesn't wash out genuine post-stimulus response structure.
+        # frames fully NaN across all cells = the photostim-pulse blanking window
+        # plus (when mask_artifact) the baseline->peak gap; exclude them from
+        # norm/zscore statistics so the artifact-adjacent dip doesn't wash out
+        # genuine post-stimulus response structure.
         valid_frame = ~np.all(np.isnan(avg_sorted), axis=0)
 
         if mode == 'norm':

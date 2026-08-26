@@ -70,9 +70,11 @@ plot_preference_maps(dat, thr=0.1);
 
 
 # %% 4. photostimulation group dF/F activity
+# plot_photostim_group_heatmaps(dat,baseline=baseline, peak=peak, mode='raw');
+
 describe_photostim_groups(dat)
-# plot_photostim_group_heatmaps(dat, mode='zscore');
-plot_photostim_target_traces(dat, baseline=baseline, peak=peak, trial_range=[]);
+
+plot_photostim_target_traces(dat, baseline=baseline, peak=peak);
 
 
 # %% 5. influence: grand average across all stimulus conditions
