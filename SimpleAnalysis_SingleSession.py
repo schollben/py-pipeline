@@ -49,7 +49,7 @@ rebuild_cyc(dat, preStim=0.25, postStim=2, offsetFrames=-15);
 plot_stim_traces(dat, [1,2,10,15,20],
                  mask_artifact=False,
                  baseline_subtract=True,
-                 trials='all');
+                 trials='sham');
 
 # recompute peak-minus-baseline responses from cyc
 # baseline/peak: windows read off the plot above, in seconds from the START of the cyc window (t=0 is the left edge of the plot)
@@ -69,25 +69,25 @@ print(f'gDSI median {np.nanmedian(dat.gdsi):.3f}  |  gOSI median {np.nanmedian(d
 plot_preference_maps(dat, thr=0.1);
 
 
-# %% 5. photostimulation group dF/F activity
+# %% 4. photostimulation group dF/F activity
 describe_photostim_groups(dat)
 # plot_photostim_group_heatmaps(dat, mode='zscore');
-plot_photostim_target_traces(dat, baseline=baseline, peak=peak);
+plot_photostim_target_traces(dat, baseline=baseline, peak=peak, trial_range=[]);
 
 
-# %% 6. influence: grand average across all stimulus conditions
+# %% 5. influence: grand average across all stimulus conditions
 # windows are inherited from compute_responses above (via dat.resps), so influence
 # and resp always measure the same thing; pass baseline=/peak= here only to override
 influence_grand(dat);
 plot_influence_maps(dat);
 
 
-# %% 7. influence maps by stimulus contrast
+# %% 6. influence maps by stimulus contrast
 influence_by_stim(dat);
 plot_influence_by_contrast(dat);
 
 
-# %% 9. bootstrap influence (mean/SEM/CI over resampled trials)
+# %% 7. bootstrap influence (mean/SEM/CI over resampled trials)
 influence_bootstrap(dat, by='grand', n_boot=1000, seed=0);
 {tn: (v['grand'], v['sem']) for tn, v in dat.influence.items()}
 

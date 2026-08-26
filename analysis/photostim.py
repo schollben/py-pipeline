@@ -558,7 +558,7 @@ def plot_influence_by_contrast(s, influence=None):
 def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
                                  post_sec=1.0, baseline=None, peak=None,
                                  show_windows=True, ymin=-0.05,
-                                 baseline_subtract=True):
+                                 baseline_subtract=True, trial_range=None):
     """Trial-averaged cyc timecourse of each targeted ROI, real vs sham.
 
     Grid of line plots: one row per real photostim group/ensemble, one column per
@@ -584,6 +584,11 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
         before averaging, matching what `compute_responses` measures (per-trial,
         not per-averaged-trace). Removes the dF/F offset and shrinks the SEM band
         by the amount of across-trial baseline drift.
+    trial_range : (t0, t1) half-open range of cyc trial indices to include,
+        e.g. (0, 10) for the first ten repeats of each stim or (10, None) to
+        drop them. Either bound may be None for open-ended. The index is the
+        repeat number within a stimulus (cyc axis 2), not a presentation number
+        in acquisition order. None (default) uses every trial.
     """
     if not s.has_photostim:
         print(f'{s.exp_id}: no photostimulation data in this session.')
@@ -598,6 +603,11 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
     base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec,
                                             baseline, peak)
     check_real_sham_ordering(s, base_sl, peak_sl)
+
+    if trial_range is not None:
+        t_lo, t_hi = trial_range
+        t_lo = 0 if t_lo is None else int(t_lo)
+        t_hi = s.cyc.shape[2] if t_hi is None else int(t_hi)
 
     # display frame slice from the requested time window (from cyc-window start)
     if window is not None:
@@ -614,6 +624,12 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
 
     def mean_sem(roi, target_tn):
         si, ti = np.where(grp == target_tn)
+        if trial_range is not None:
+            keep = (ti >= t_lo) & (ti < t_hi)
+            si, ti = si[keep], ti[keep]
+        if si.size == 0:
+            nan = np.full(n_frames, np.nan)
+            return nan, nan
         tr = s.cyc[roi, si, ti, :]                       # (n_sel, n_frames)
         if baseline_subtract:
             tr = tr - np.nanmean(tr[:, base_sl], axis=1, keepdims=True)
@@ -659,6 +675,7 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
             ax.set_xlabel('time from cyc start (s; onset = dashed)', fontsize=8)
 
     sns.despine(fig=fig)
-    fig.suptitle(f'{s.exp_id} · target-ROI timecourses (real vs sham)')
+    tr_note = '' if trial_range is None else f' · trials [{t_lo}, {t_hi})'
+    fig.suptitle(f'{s.exp_id} · target-ROI timecourses (real vs sham){tr_note}')
     fig.tight_layout()
     return fig
