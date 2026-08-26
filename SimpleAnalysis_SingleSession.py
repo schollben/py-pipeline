@@ -58,7 +58,8 @@ plot_stim_traces(dat, [1,2,10,15,20],
 baseline=(0, 0.25) # this cooresponds to the pre-stimulus period
 peak=(1.15, 1.4)
 compute_responses(dat, baseline=baseline, peak=peak);
-compute_snr(dat, baseline=baseline, peak=peak);
+compute_snr(dat, baseline=baseline, peak=peak, thresh = 1);
+
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit) + preference map
 # and compute direction / orientation selectivit

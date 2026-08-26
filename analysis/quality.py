@@ -17,13 +17,14 @@ def compute_snr(s, thresh=1.0, baseline_guard_sec=0.5, post_sec=1.0,
     For each cell, the preferred stimulus is the one with the largest mean peak
     response, and
 
-        SNR = mu_pref / (sigma_pref + sigma_base)
+        SNR = mu_pref / sqrt(sigma_pref**2 + sigma_base**2)
 
     where mu_pref / sigma_pref are the mean and across-trial SD of the per-trial
     responses at that preferred stimulus (from `s.resps`, already peak-minus-
     baseline, so mu_pref is a change from baseline), and sigma_base is the
     across-trial SD of the per-trial baseline means, pooled over every stimulus.
-    Both denominator terms are trial-to-trial SDs, so they are in the same units.
+    Both denominator terms are trial-to-trial SDs, so they are in the same units,
+    and they combine in quadrature as independent noise sources.
 
     Cells with SNR > `thresh` are good. Overwrites `s.is_good_cell` in place and
     sets `s.snr` and `s.pref_stim`.
@@ -63,7 +64,7 @@ def compute_snr(s, thresh=1.0, baseline_guard_sec=0.5, post_sec=1.0,
             base_means = np.nanmean(s.cyc[..., base_sl], axis=3)  # (cells, stims, trials)
     sigma_base = np.nanstd(base_means.reshape(s.n_rois, -1), axis=1, ddof=1)
 
-    denom = sigma_pref + sigma_base
+    denom = np.sqrt(sigma_pref ** 2 + sigma_base ** 2)
     with np.errstate(invalid='ignore', divide='ignore'):
         snr = np.where(denom > 0, mu_pref / denom, np.nan)
     snr[all_nan] = np.nan
