@@ -86,13 +86,14 @@ plot_influence_maps(dat);
 
 
 # %% 6. influence maps by stimulus contrast
-influence_by_contrast(dat); 
+influence_by_contrast(dat, good_only=True, mode='dprime'); 
 plot_influence_by_contrast(dat); 
 
-
-# # %% 7. influence maps by stimulus
 # influence_by_stim(dat); 
 # plot_influence_by_stim(dat); 
+
+# %% 
+
 
 
 
