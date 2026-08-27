@@ -334,22 +334,28 @@ def influence_grand(s, baseline_guard_sec=None, post_sec=None,
                     clip_sham=True):
     """Grand-average influence of each target group on all nontargets.
 
-    Diagnostic entry point: pools every trial of the real group and every trial
-    of its paired sham (across all stimulus conditions), takes the mean of each,
-    and forms:
+    Diagnostic entry point: pools every trial of the real group (across all
+    stimulus conditions) and compares it against a common sham reference — every
+    sham (0 mW) trial of every group pooled — then forms:
 
         mode='dprime' (default):
-            influence[cell] = (mean(resp_real) - mean(resp_sham))
-                              / sqrt((var(resp_real) + var(resp_sham)) / 2)
+            influence[cell] = (mean(resp_real) - mean(sham_all)) / std(sham_all)
         mode='diff':
-            influence[cell] =  mean(resp_real) - mean(resp_sham)
+            influence[cell] =  mean(resp_real) - mean(sham_all)
+
+    All shams are pooled into one reference per cell: they differ only in which
+    targets were addressed at zero power, so they measure the same null, and
+    pooling gives a better-sampled mean and sigma than any single group's shams.
 
     'dprime' is a standardised effect size: the real-minus-sham difference in
-    units of the pooled trial-to-trial SD. The denominator is a variance, so it
-    is always positive and never near zero — unlike normalising by the sham mean,
-    which is statistically indistinguishable from zero for most cells and
-    produces both huge values and spurious sign flips. 'diff' is the same
-    numerator left in dF/F units, for when absolute magnitude matters.
+    units of the sham's own trial-to-trial SD — a z-score against the null
+    condition. Only the sham SD is used, not a real/sham pooled SD, because
+    photostim can itself inflate response variability, which would shrink the
+    effect size for exactly the cells being driven most strongly. The denominator
+    is an SD, so it is always positive and never near zero — unlike normalising
+    by the sham mean, which is statistically indistinguishable from zero for most
+    cells and produces both huge values and spurious sign flips. 'diff' is the
+    same numerator left in dF/F units, for when absolute magnitude matters.
 
     Per-trial responses default to `s.resps` from `compute_responses`, so influence
     is measured over exactly the same baseline/peak windows as `resp` — run
@@ -382,29 +388,32 @@ def influence_grand(s, baseline_guard_sec=None, post_sec=None,
     resps, base_sl, peak_sl = _influence_trial_resps(
         s, baseline_guard_sec, post_sec, baseline, peak)
 
+    # one common sham reference for every group: all sham (0 mW) trials pooled.
+    # Shams differ only in which targets were addressed at zero power, so they
+    # measure the same null; pooling them gives a single per-cell reference and a
+    # far better-sampled sigma than any one group's shams could.
+    sham_tns = sorted({info['sham'] for info in gmap.values()})
+    sham_all = np.concatenate(
+        [group_trial_resp(s, tn, grp, base_sl, peak_sl, resps).reshape(s.n_rois, -1)
+         for tn in sham_tns], axis=1)                     # (n_cells, n_sham_trials)
+    mean_sham = np.nanmean(sham_all, axis=1)              # (n_cells,)
+    sigma_sham = np.nanstd(sham_all, axis=1, ddof=1)      # (n_cells,)
+    if clip_sham:
+        # a negative sham response is not physical; for these cells the sham is
+        # statistically indistinguishable from zero, so floor it there rather
+        # than let noise inflate the real-minus-sham difference.
+        mean_sham = np.where(mean_sham < 0, 0.0, mean_sham)
+
     influence = {}
     for real_tn, info in gmap.items():
         resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl, resps)
-        resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl, resps)
         mean_real = np.nanmean(resp_real, axis=(1, 2))    # (n_cells,)
-        mean_sham = np.nanmean(resp_sham, axis=(1, 2))    # (n_cells,)
-        if clip_sham:
-            # a negative sham response is not physical; for these cells the sham
-            # is statistically indistinguishable from zero, so floor it there
-            # rather than let noise inflate the real-minus-sham difference.
-            mean_sham = np.where(mean_sham < 0, 0.0, mean_sham)
         if mode == 'diff':
             grand = mean_real - mean_sham
         else:
-            # pooled trial-to-trial SD; trials of every stim pooled per cell
-            flat_real = resp_real.reshape(s.n_rois, -1)
-            flat_sham = resp_sham.reshape(s.n_rois, -1)
-            var_real = np.nanvar(flat_real, axis=1, ddof=1)
-            var_sham = np.nanvar(flat_sham, axis=1, ddof=1)
-            pooled_sd = np.sqrt((var_real + var_sham) / 2)
             with np.errstate(invalid='ignore', divide='ignore'):
-                grand = np.where(pooled_sd > 0,
-                                 (mean_real - mean_sham) / pooled_sd, np.nan)
+                grand = np.where(sigma_sham > 0,
+                                 (mean_real - mean_sham) / sigma_sham, np.nan)
         if good_only:
             grand = np.where(np.asarray(s.is_good_cell, dtype=bool), grand, np.nan)
         influence[real_tn] = dict(grand=grand, kind='grand', mode=mode)
