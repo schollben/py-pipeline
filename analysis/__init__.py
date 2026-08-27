@@ -10,5 +10,6 @@ from .quality import compute_snr
 from .maps import plot_preference_maps
 from .photostim import (describe_photostim_groups, plot_photostim_group_heatmaps,
                         plot_photostim_target_traces, check_real_sham_ordering,
-                        influence_grand, influence_by_stim, influence_bootstrap,
+                        influence_grand, influence_by_stim, influence_by_contrast,
+                        influence_bootstrap,
                         plot_influence_maps, plot_influence_by_contrast)

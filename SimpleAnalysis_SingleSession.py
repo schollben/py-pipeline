@@ -4,13 +4,15 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+
+from analysis.photostim import influence_by_contrast
 sns.set_theme(context='notebook', style='white')
 from analysis import (load_session, check_event_alignment, dropFirstEvents,
                       rebuild_cyc, compute_responses, compute_snr,plot_avg_rois,
                       plot_stim_traces, plot_tuning_curves, compute_selectivity,
                       plot_preference_maps, describe_photostim_groups,
                       plot_photostim_group_heatmaps, plot_photostim_target_traces,
-                      influence_grand, influence_by_stim, influence_bootstrap,
+                      influence_grand, influence_by_contrast, influence_by_stim, influence_bootstrap,
                       plot_influence_maps, plot_influence_by_contrast)
 
 ################################################################
@@ -78,17 +80,19 @@ plot_photostim_target_traces(dat, baseline=baseline, peak=peak);
 # %% 5. influence: grand average across all stimulus conditions
 # windows are inherited from compute_responses above (via dat.resps), so influence
 # and resp always measure the same thing; pass baseline=/peak= here only to override (not recommended)
-influence_grand(dat, good_only=True, mode='dprime'); # mode: diff or dprime
-plot_influence_maps(dat);
+influence_grand(dat, good_only=True, mode='diff'); # mode: diff or dprime
+plot_influence_maps(dat); 
 
 
 
 # %% 6. influence maps by stimulus contrast
-influence_by_stim(dat);
-plot_influence_by_contrast(dat);
+influence_by_contrast(dat); 
+plot_influence_by_contrast(dat); 
 
 
-# %%
+# # %% 7. influence maps by stimulus
+# influence_by_stim(dat); 
+# plot_influence_by_stim(dat); 
 
 
 

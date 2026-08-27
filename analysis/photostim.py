@@ -422,44 +422,153 @@ def influence_grand(s, baseline_guard_sec=None, post_sec=None,
     return influence
 
 
-def influence_by_stim(s, baseline_guard_sec=None, post_sec=None,
-                      baseline=None, peak=None):
-    """Influence of each target group on all nontargets, per stimulus condition.
+def _influence_by_bins(s, bins, kind, baseline_guard_sec, post_sec, baseline,
+                       peak, mode, good_only, clip_sham):
+    """Influence per stimulus bin, against a sham reference matched to each bin.
 
-    Same measure as `influence_grand`, but trials are pooled within each
-    stimulus id rather than across all of them:
-
-        influence[cell, stim] = (mean(resp_real) - mean(resp_sham)) / mean(resp_sham)
-
-    Window handling matches `influence_grand`: defaults to `s.resps` from
-    `compute_responses`, overridden by any explicit window argument.
-
-    Sets s.influence = {real_tn: {'influence': (n_cells, n_stims),
-    'grand': (n_cells,), 'kind': 'stim'}} and returns the same dict. `grand` is
-    the mean of `influence` across stims, for `plot_influence_maps`.
+    `bins` is a list of (label, stim_mask, sham_mask) triples. `stim_mask`
+    selects the columns of the (n_cells, n_stims, n_trials) response arrays that
+    make up the bin's real trials; `sham_mask` selects the columns forming its
+    sham reference — usually the same, but broader where several stimulus ids are
+    the same condition (e.g. every contrast-0 stim is a blank, so their shams all
+    pool into one reference). Shams are pooled across every sham group — they
+    measure the same null — but stay matched to the bin's visual drive, so that
+    drive is present in both terms and cancels in the difference. Shared by
+    `influence_by_stim` (one bin per stimulus) and `influence_by_contrast` (one
+    bin per contrast level).
     """
     gmap = photostim_group_map(s)
     grp = cyc_trial_group(s)
     resps, base_sl, peak_sl = _influence_trial_resps(
         s, baseline_guard_sec, post_sec, baseline, peak)
 
+    sham_tns = sorted({info['sham'] for info in gmap.values()})
+    sham_by_group = [group_trial_resp(s, tn, grp, base_sl, peak_sl, resps)
+                     for tn in sham_tns]                  # each (cells, stims, trials)
+
+    # per-bin sham reference: all sham groups pooled, restricted to the bin
+    n_bins = len(bins)
+    mean_sham = np.full((s.n_rois, n_bins), np.nan)
+    sigma_sham = np.full((s.n_rois, n_bins), np.nan)
+    for bi, (_, _, sham_mask) in enumerate(bins):
+        pooled = np.concatenate(
+            [r[:, sham_mask, :].reshape(s.n_rois, -1) for r in sham_by_group], axis=1)
+        mean_sham[:, bi] = np.nanmean(pooled, axis=1)
+        sigma_sham[:, bi] = np.nanstd(pooled, axis=1, ddof=1)
+    if clip_sham:
+        mean_sham = np.where(mean_sham < 0, 0.0, mean_sham)
+
+    good = (np.asarray(s.is_good_cell, dtype=bool) if good_only else None)
+    labels = np.array([lbl for lbl, _, _ in bins], dtype=float)
+
     influence = {}
-    for real_tn, info in gmap.items():
+    for real_tn in gmap:
         resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl, resps)
-        resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl, resps)
-        mean_real = np.nanmean(resp_real, axis=2)    # (n_cells, n_stims)
-        mean_sham = np.nanmean(resp_sham, axis=2)    # (n_cells, n_stims)
-        with np.errstate(invalid='ignore', divide='ignore'):
-            inf = np.where(np.abs(mean_sham) > 1e-6,
-                           (mean_real - mean_sham) / mean_sham, np.nan)
-        influence[real_tn] = dict(
-            influence=inf,
-            grand=np.nanmean(inf, axis=1),
-            kind='stim',
-        )
+        mean_real = np.full((s.n_rois, n_bins), np.nan)
+        for bi, (_, stim_mask, _) in enumerate(bins):
+            mean_real[:, bi] = np.nanmean(
+                resp_real[:, stim_mask, :].reshape(s.n_rois, -1), axis=1)
+
+        if mode == 'diff':
+            inf = mean_real - mean_sham
+        else:
+            with np.errstate(invalid='ignore', divide='ignore'):
+                inf = np.where(sigma_sham > 0,
+                               (mean_real - mean_sham) / sigma_sham, np.nan)
+        if good_only:
+            inf = np.where(good[:, None], inf, np.nan)
+
+        influence[real_tn] = dict(influence=inf, grand=np.nanmean(inf, axis=1),
+                                  labels=labels, kind=kind, mode=mode)
 
     s.influence = influence
     return influence
+
+
+def _check_influence_args(s, mode, good_only):
+    if mode not in ('dprime', 'diff'):
+        raise ValueError("mode must be 'dprime' or 'diff'")
+    if good_only and s.is_good_cell is None:
+        raise ValueError(
+            f'{s.exp_id}: good_only=True but the session has no is_good_cell '
+            f'flag; run compute_snr(...) first or pass good_only=False.')
+
+
+def influence_by_stim(s, baseline_guard_sec=None, post_sec=None,
+                      baseline=None, peak=None, mode='dprime', good_only=True,
+                      clip_sham=True):
+    """Influence of each target group on all nontargets, per stimulus condition.
+
+    Same measure as `influence_grand`, but real trials are pooled within each
+    stimulus id rather than across all of them, and each stimulus is compared
+    against its OWN sham reference:
+
+        mode='dprime' (default):
+            influence[cell, stim] = (mean(real[stim]) - mean(sham[stim]))
+                                    / std(sham[stim])
+        mode='diff':
+            influence[cell, stim] =  mean(real[stim]) - mean(sham[stim])
+
+    The sham reference is pooled across every sham group (they measure the same
+    null) but kept matched to the stimulus, so the visual response is present in
+    both terms and cancels in the difference — what remains is the photostim
+    effect, not the cell's visual tuning. The exception is contrast 0: every
+    contrast-0 stimulus is the same blank regardless of its nominal direction, so
+    their sham trials all pool into a single reference shared by those stimuli.
+
+    Away from contrast 0, `sigma` is estimated from one stimulus' worth of sham
+    trials, so it is noisier than in `influence_grand` and inflates d' where it
+    comes out small; prefer `influence_by_contrast` for interpretation, or
+    `mode='diff'`, which has no denominator.
+
+    Window handling, `mode`, `good_only` and `clip_sham` all match
+    `influence_grand`.
+
+    Sets s.influence = {real_tn: {'influence': (n_cells, n_stims),
+    'grand': (n_cells,), 'labels': stim ids, 'kind': 'stim', 'mode': mode}} and
+    returns the same dict. `grand` is the mean across stims, for
+    `plot_influence_maps`.
+    """
+    _check_influence_args(s, mode, good_only)
+    # every contrast-0 stimulus is the same blank regardless of its nominal
+    # direction, so both its real and its sham trials pool across all contrast-0
+    # stimuli: those columns are identical to each other, and to the contrast-0
+    # column of influence_by_contrast. At other contrasts real and sham are both
+    # kept per-stimulus, since the visual drive has to cancel in the difference.
+    blank = s.stim_table[:, 1] == 0
+    bins = [(sid,
+             blank if blank[i] else (s.unique_stims == sid),
+             blank if blank[i] else (s.unique_stims == sid))
+            for i, sid in enumerate(s.unique_stims)]
+    return _influence_by_bins(s, bins, 'stim', baseline_guard_sec, post_sec,
+                              baseline, peak, mode, good_only, clip_sham)
+
+
+def influence_by_contrast(s, baseline_guard_sec=None, post_sec=None,
+                          baseline=None, peak=None, mode='dprime',
+                          good_only=True, clip_sham=True):
+    """Influence of each target group on all nontargets, per contrast level.
+
+    As `influence_by_stim`, but stimuli are binned by contrast rather than taken
+    individually: every stimulus at a given contrast is pooled, and the sham
+    reference is pooled across sham groups within that same contrast.
+
+        influence[cell, contrast] = (mean(real[contrast]) - mean(sham[contrast]))
+                                    / std(sham[contrast])
+
+    Pooling over directions within a contrast gives many more trials per bin than
+    `influence_by_stim`, so mean and sigma are far better estimated, while the
+    reference still matches the visual drive of the trials it is compared against.
+
+    Sets s.influence = {real_tn: {'influence': (n_cells, n_contrasts),
+    'grand': (n_cells,), 'labels': contrasts, 'kind': 'contrast',
+    'mode': mode}} and returns the same dict.
+    """
+    _check_influence_args(s, mode, good_only)
+    stim_contrast = s.stim_table[:, 1]
+    bins = [(c, stim_contrast == c, stim_contrast == c) for c in s.contrasts]
+    return _influence_by_bins(s, bins, 'contrast', baseline_guard_sec, post_sec,
+                              baseline, peak, mode, good_only, clip_sham)
 
 
 def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
@@ -643,36 +752,74 @@ def plot_influence_maps(s, influence=None, show_image=False, vlim=None):
     fig.tight_layout()
     modes = {influence[tn].get('mode', 'dprime') for tn in real_groups}
     lbl = ('influence (dF/F, real - sham)' if modes == {'diff'}
-           else "influence (d', pooled SD)")
+           else "influence (d', sham SD)")
     fig.colorbar(sm, ax=axes[0].tolist(), fraction=0.046, label=lbl)
     return fig
 
 
-def plot_influence_by_contrast(s, influence=None):
-    """Spatial influence maps split by stimulus contrast (rows=groups, cols=contrast)."""
+def plot_influence_by_contrast(s, influence=None, show_image=False, vlim=None):
+    """Spatial influence maps split by stimulus contrast (rows=groups, cols=contrast).
+
+    Reads the per-bin `influence` produced by `influence_by_contrast` (one column
+    per contrast) or by `influence_by_stim` (stims averaged within each contrast).
+    All panels share one symmetric colour scale and one figure-level colorbar, so
+    fills are comparable across both groups and contrasts.
+
+    show_image : draw the average 2P image behind the ROIs (default False).
+    vlim : symmetric colour limit (+/- vlim). None uses the 99th percentile of
+        |influence| pooled over every panel.
+    """
     if influence is None:
         if s.influence is None:
             raise ValueError(
                 f'{s.exp_id}: no influence computed; run rebuild_cyc() -> '
-                'compute_responses() -> influence_by_stim(...) first')
+                'compute_responses() -> influence_by_contrast(...) first')
         influence = s.influence
     gmap = photostim_group_map(s)
     real_groups = sorted(influence.keys())
     contrasts = s.contrasts
+
+    first = influence[real_groups[0]]
+    if 'influence' not in first:
+        raise ValueError(
+            f'{s.exp_id}: s.influence holds a grand average, not per-stimulus '
+            f'values; run influence_by_contrast(...) or influence_by_stim(...).')
+
+    # panel values: already per-contrast, or per-stim averaged within contrast
+    by_contrast = first.get('kind') == 'contrast'
     stim_contrast = s.stim_table[:, 1]
+
+    def panel(real_tn, contrast):
+        inf = influence[real_tn]['influence']
+        if by_contrast:
+            col = int(np.argmin(np.abs(influence[real_tn]['labels'] - contrast)))
+            return inf[:, col]
+        return np.nanmean(inf[:, stim_contrast == contrast], axis=1)
+
+    panels = {(tn, c): panel(tn, c) for tn in real_groups for c in contrasts}
+
+    if vlim is None:
+        allvals = np.concatenate([v.ravel() for v in panels.values()])
+        vlim = np.nanpercentile(np.abs(allvals), 99)
+        if not np.isfinite(vlim) or vlim == 0:
+            vlim = 1.0
 
     fig, axes = plt.subplots(len(real_groups), len(contrasts),
                               figsize=(5 * len(contrasts), 5 * len(real_groups)),
                               squeeze=False)
     for row, real_tn in enumerate(real_groups):
-        inf = influence[real_tn]['influence']              # (n_cells, n_stims)
         for col, contrast in enumerate(contrasts):
-            stim_mask = stim_contrast == contrast
-            grand = np.nanmean(inf[:, stim_mask], axis=1)
-            _draw_influence_map(axes[row, col], s, grand, gmap[real_tn]['target_rois'],
-                                f'group {real_tn:g}  |  contrast {contrast:g}')
+            sm = _draw_influence_map(
+                axes[row, col], s, panels[(real_tn, contrast)],
+                gmap[real_tn]['target_rois'],
+                f'group {real_tn:g}  |  contrast {contrast:g}',
+                vlim=vlim, show_image=show_image, colorbar=False)
     fig.suptitle(f'{s.exp_id}  |  influence by contrast')
     fig.tight_layout()
+    modes = {influence[tn].get('mode', 'dprime') for tn in real_groups}
+    lbl = ('influence (dF/F, real - sham)' if modes == {'diff'}
+           else "influence (d', sham SD)")
+    fig.colorbar(sm, ax=axes.ravel().tolist(), fraction=0.046, label=lbl)
     return fig
 
 
