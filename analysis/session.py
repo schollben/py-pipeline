@@ -47,6 +47,10 @@ class Session:
     markpoints_group_info: np.ndarray = None
     markpoints_laser_power: np.ndarray = None
     markpoints_condition_idx: np.ndarray = None
+    # microscope optics (from Bruker_Acq)
+    optical_zoom: float = None
+    objective_mag: float = None
+    objective_na: float = None
     # derived (filled by tools)
     pref_dir: np.ndarray = None
     snr: np.ndarray = None
@@ -101,6 +105,13 @@ def load_session(path):
             if d is not None and d.size == 0:
                 d = None
             kw[k] = d
+        # microscope optics
+        kw['optical_zoom'] = (float(f['Bruker_Acq']['optical_zoom'][()])
+                              if 'optical_zoom' in f['Bruker_Acq'] else None)
+        kw['objective_mag'] = (float(f['Bruker_Acq']['objective_mag'][()])
+                               if 'objective_mag' in f['Bruker_Acq'] else None)
+        kw['objective_na'] = (float(f['Bruker_Acq']['objective_na'][()])
+                              if 'objective_na' in f['Bruker_Acq'] else None)
     if kw['stim_properties'] is None or kw['stim_id'] is None:
         raise ValueError(f'{exp_id}: no visual stimulus data in this session.')
     return Session(path=path, exp_id=exp_id, n_rois=n_rois,

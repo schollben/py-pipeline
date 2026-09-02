@@ -4,7 +4,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-
 from analysis.photostim import influence_by_contrast
 sns.set_theme(context='notebook', style='white')
 from analysis import (load_session, check_event_alignment, dropFirstEvents,
@@ -17,13 +16,18 @@ from analysis import (load_session, check_event_alignment, dropFirstEvents,
 
 ################################################################
 
-# TEST: 07132025, good day for oricont and photostim
-
+# 07132025, good day for oricont and photostim, offsetFrames=-15
+# 
 folderName = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/'
 
 # FNAME = '/mnt/bigdata/PROCESSED/TSeries-07132025-1042-003.h5'
-
 FNAME = folderName + 'TSeries-07132025-1042-003.h5'
+
+#check values- did not populate correctly in processed h5
+zoom = {}
+zoom[1] = 1136.7 
+zoom[1.5] = 757.8
+zoom[2] = 568.3
 
 ################################################################
 
@@ -80,23 +84,33 @@ plot_photostim_target_traces(dat, baseline=baseline, peak=peak);
 # %% 5. influence: grand average across all stimulus conditions
 # windows are inherited from compute_responses above (via dat.resps), so influence
 # and resp always measure the same thing; pass baseline=/peak= here only to override (not recommended)
-influence_grand(dat, good_only=True, mode='diff'); # mode: diff or dprime
+influence_grand(dat, good_only=True, mode='dprime'); # mode: diff or dprime
 plot_influence_maps(dat); 
 
 
 
 # %% 6. influence maps by stimulus contrast
-influence_by_contrast(dat, good_only=True, mode='dprime'); 
+influence_by_contrast(dat, good_only=True, mode='dprime'); # mode: diff or dprime
 plot_influence_by_contrast(dat); 
 
 # influence_by_stim(dat); 
 # plot_influence_by_stim(dat); 
 
-# %% 
+# %% 7. examine nontarget-target relationships
+
+ROI_locations = np.array([
+    np.argwhere(dat.mask2d[c] > 0.5).mean(axis=0)[[1, 0]] 
+    for c in range(dat.n_rois)
+])
+dat.microns_per_pixel = zoom[dat.optical_zoom] / 512 #assume 512 pixels per line
+ROI_locations * at.microns_per_pixe
+ROI_locations = ROI_locations.astype(int)
+print(ROI_locations)
 
 
 
-
-# %% bootstrap influence (mean/SEM/CI over resampled trials)
+# %% todo:
+# bootstrap influence (mean/SEM/CI over resampled trials)
 influence_bootstrap(dat, by='grand', n_boot=1000, seed=0);
 {tn: (v['grand'], v['sem']) for tn, v in dat.influence.items()}
+
