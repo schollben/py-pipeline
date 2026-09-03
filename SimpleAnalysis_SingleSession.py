@@ -85,8 +85,7 @@ plot_photostim_target_traces(dat, baseline=baseline, peak=peak);
 # windows are inherited from compute_responses above (via dat.resps), so influence
 # and resp always measure the same thing; pass baseline=/peak= here only to override (not recommended)
 influence_grand(dat, good_only=True, mode='dprime'); # mode: diff or dprime
-plot_influence_maps(dat); 
-
+plot_influence_maps(dat, vlim=0.5)
 
 
 # %% 6. influence maps by stimulus contrast
@@ -103,14 +102,7 @@ ROI_locations = np.array([
     for c in range(dat.n_rois)
 ])
 dat.microns_per_pixel = zoom[dat.optical_zoom] / 512 #assume 512 pixels per line
-ROI_locations * at.microns_per_pixe
+ROI_locations * at.microns_per_pixel
 ROI_locations = ROI_locations.astype(int)
 print(ROI_locations)
-
-
-
-# %% todo:
-# bootstrap influence (mean/SEM/CI over resampled trials)
-influence_bootstrap(dat, by='grand', n_boot=1000, seed=0);
-{tn: (v['grand'], v['sem']) for tn, v in dat.influence.items()}
 
