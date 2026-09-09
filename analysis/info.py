@@ -15,6 +15,18 @@ def getOffsetFrames(session_name):
 
     return offset_frames.get(session_name, 0)
 
+def removeROIs(session_name):
+
+        roi = {}
+        roi['TSeries-07132025-1042-003.h5'] = [55]
+        roi['TSeries-07132025-1042-001.h5'] = []
+
+        if session_name not in roi:
+            #default
+            roi[session_name] = []
+
+        return roi.get(session_name, [])
+
 
 def getWindow(session_name):
 

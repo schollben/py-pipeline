@@ -70,9 +70,13 @@ compute_snr(dat, baseline=baseline, peak=peak, thresh = 1);
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit) + preference map
 # and compute direction / orientation selectivit
+
 plot_tuning_curves(dat)
-compute_selectivity(dat)
-print(f'gDSI median {np.nanmedian(dat.gdsi):.3f}  |  gOSI median {np.nanmedian(dat.gosi):.3f}')
+
+# only run IF 'plot_tuning_curves' not run
+# compute_selectivity(dat) 
+# print(f'gDSI median {np.nanmedian(dat.gdsi):.3f}  |  gOSI median {np.nanmedian(dat.gosi):.3f}')
+
 #preference maps (direction | orientation)
 plot_preference_maps(dat, thr=0.1)
 
