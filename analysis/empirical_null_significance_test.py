@@ -2,6 +2,10 @@
 # empirical-null significance of grand-mean d' influence (nontargets) Standalone cell. 
 # Efron local-fdr against an empirical null built from sham-vs-sham
 # d' values. Run after influence_grand(dat, mode='dprime').
+# Notes: 
+# 
+# 
+# 
 
 import numpy as np
 import matplotlib.pyplot as plt
