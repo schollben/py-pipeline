@@ -35,6 +35,13 @@ h, w = dat.avg_image.shape
 dat.microns_per_pixel = info.getZoom(dat.optical_zoom) / min([h, w])
 dat.offsetFrames = info.getOffsetFrames(session_name)
 
+# build ROI locations in microns
+ROI_locations = np.array([
+    np.argwhere(dat.mask2d[c] > 0.5).mean(axis=0)[[1, 0]] 
+    for c in range(dat.n_rois)
+])
+dat.roiLocs = ROI_locations * dat.microns_per_pixel
+
 # show average image with ROI mask
 plot_avg_rois(dat,vmax_frac=0.6)
 
@@ -67,6 +74,9 @@ peak=info.getWindow(session_name)[1]
 compute_responses(dat, baseline=baseline, peak=peak);
 compute_snr(dat, baseline=baseline, peak=peak, thresh = 1);
 
+remove_rois = info.removeROIs(session_name)
+for n in remove_rois:
+    dat.is_good_cell[n] = False
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit) + preference map
 # and compute direction / orientation selectivit
@@ -82,6 +92,7 @@ plot_preference_maps(dat, thr=0.1)
 
 
 # %% 4. photostimulation group dF/F activity
+
 describe_photostim_groups(dat)
 plot_photostim_target_traces(dat, baseline=baseline, peak=peak)
 
@@ -89,22 +100,28 @@ plot_photostim_target_traces(dat, baseline=baseline, peak=peak)
 # %% 5. influence: grand average across all stimulus conditions
 # windows are inherited from compute_responses above (via dat.resps), so influence
 # and resp always measure the same thing; pass baseline=/peak= here only to override (not recommended)
+
 influence_grand(dat, good_only=True, mode='dprime') # mode: diff or dprime
 plot_influence_maps(dat, vlim=0.5)
 
 
 # %% 6. influence maps by stimulus contrast
+
 influence_by_contrast(dat, good_only=True, mode='dprime') # mode: diff or dprime
-plot_influence_by_contrast(dat); 
+plot_influence_by_contrast(dat,vlim=0.5); 
 
 
-# %% 7. examine nontarget-target relationships
+# %% 7. examine nontarget-target relationships (independent of contrast)
 
-ROI_locations = np.array([
-    np.argwhere(dat.mask2d[c] > 0.5).mean(axis=0)[[1, 0]] 
-    for c in range(dat.n_rois)
-])
-ROI_locations * dat.microns_per_pixel
-ROI_locations = ROI_locations.astype(int)
-print(ROI_locations)
+influence_grand(dat, good_only=True, mode='dprime')
+infl = {tn: v['grand'].copy() for tn, v in dat.influence.items()}
 
+# ensemble_ids = list(influence_grand_result.keys())
+# list(infl.keys())
+#  for tn in ensemble_ids:
+    # influence_array = influence_grand_result[tn]
+# dat.roiLocs - 
+
+
+# influence_by_contrast(dat, good_only=True, mode='dprime')
+# influence_contrast_result = {tn: v['influence'].copy() for tn, v in dat.influence.items()}
