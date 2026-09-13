@@ -68,7 +68,9 @@ def plot_stim_traces(s, cells, gap=20, mask_artifact=True,
         if s.has_photostim:
             from .photostim import cyc_trial_group, photostim_group_map
             grp = cyc_trial_group(s)
-            sham_tns = list({info['sham'] for info in photostim_group_map(s).values()})
+            sham_tns = [tn for tn in {info['sham']
+                                      for info in photostim_group_map(s).values()}
+                        if tn is not None]
             cand = np.isin(grp, sham_tns)
             if cand.any():
                 sel, mode = cand, 'sham'

@@ -22,7 +22,7 @@ from analysis import info
 ################################################################
 
 # session_name = 'TSeries-07132025-1042-002.h5'
-session_name = 'TSeries-11032024-1313-001.h5' # 11032024-1313-003, -007, -012, -014, -017.
+session_name = 'TSeries-11032024-1313-003.h5' # 11032024-1313-003, -007, -012, -014, -017.
 folderName = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/'
 FNAME = folderName + session_name
 
@@ -55,7 +55,7 @@ plot_avg_rois(dat,vmax_frac=0.6);
 # check for a spurious first TTL pair before building cyc
 if check_event_alignment(dat):
     dropFirstEvents(dat)
-
+# photostimulation check
 if dat.has_photostim==False:
     print("NO photostimulation data")
 
@@ -110,10 +110,10 @@ plot_preference_maps(dat, thr=0.1);
 # windows are inherited from compute_responses above (via dat.resps), so influence
 # and resp always measure the same thing; pass baseline=/peak= here only to override (not recommended)
 
-influence_grand(dat, good_only=True, mode='dprime') # mode: diff or dprim
+influence_grand(dat, good_only=True, mode='dprime') # mode: diff or dprim or z-score
 group_map = photostim_group_map(dat)
 
-# plot_influence_maps(dat, vlim=0.5); 
+plot_influence_maps(dat, vlim=0.5); 
 
 # loop through ensembles
 for tn, info in group_map.items():
