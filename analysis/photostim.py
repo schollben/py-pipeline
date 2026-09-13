@@ -3,7 +3,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.colors import TwoSlopeNorm
 
-from .session import cyc_response_windows, cyc_onset, _window_slice
+from .session import (cyc_response_windows, cyc_onset, _window_slice,
+                      require_visual)
 
 _TARGET_COLOR = 'purple'
 _NONTARGET_COLOR = 'gray'
@@ -549,6 +550,8 @@ def _influence_by_bins(s, bins, kind, baseline_guard_sec, post_sec, baseline,
 
 
 def _check_influence_args(s, mode, good_only):
+    # both callers bin trials by stimulus condition, so they need stim_table
+    require_visual(s, 'influence_by_stim / influence_by_contrast')
     if mode not in ('dprime', 'diff'):
         raise ValueError("mode must be 'dprime' or 'diff'")
     if good_only and s.is_good_cell is None:

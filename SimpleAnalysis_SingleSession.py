@@ -89,12 +89,16 @@ for n in remove_rois:
 
 
 # %% 3. tuning curves + preferred direction (double-Gaussian fit) + preference map
+# skipped on a photostim-only session: no visual drive, so no tuning to measure
 
 # and compute direction / orientation selectivit
-plot_tuning_curves(dat); 
-compute_selectivity(dat) 
-#preference maps (direction | orientation)
-plot_preference_maps(dat, thr=0.1); 
+if dat.has_visual:
+    plot_tuning_curves(dat);
+    compute_selectivity(dat)
+    #preference maps (direction | orientation)
+    plot_preference_maps(dat, thr=0.1);
+else:
+    print(f'{dat.exp_id}: {dat.session_type} session — skipping tuning (no visual stimulus)')
 
 
 # %% 4. photostimulation group dF/F activity
