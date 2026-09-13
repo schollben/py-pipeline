@@ -21,9 +21,8 @@ from analysis import info
 
 ################################################################
 
-# 07132025, good day for oricont and photostim, offsetFrames=-15
-# 
-session_name = 'TSeries-07132025-1042-003.h5'
+# session_name = 'TSeries-07132025-1042-002.h5'
+session_name = 'TSeries-11032024-1313-003.h5' # 11032024-1313-003, -007, -012, -014, -017.
 folderName = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/'
 FNAME = folderName + session_name
 
@@ -55,7 +54,10 @@ plot_avg_rois(dat,vmax_frac=0.6);
 # check for a spurious first TTL pair before building cyc
 if check_event_alignment(dat):
     dropFirstEvents(dat)
-    
+
+if dat.has_photostim==False:
+    print("NO photostimulation data")
+
 
 # %%  rebuild cyc from raw dff (un-blanked, wider) and inspect it to pick windows
 # pre/post: seconds before/after stimulus onset to include in cyc (for plotting and response computation)
@@ -106,7 +108,6 @@ plot_photostim_target_traces(dat, baseline=baseline, peak=peak);
 # windows are inherited from compute_responses above (via dat.resps), so influence
 # and resp always measure the same thing; pass baseline=/peak= here only to override (not recommended)
 
-
 influence_grand(dat, good_only=True, mode='dprime') # mode: diff or dprim
 group_map = photostim_group_map(dat)
 
@@ -144,7 +145,9 @@ for tn, info in group_map.items():
     nonTargetEnsembleDist = [] 
     nonTargetNearestDist = [] 
     infl = []
-    for n in np.where(nontarget & validinfl)[0]:
+
+    cells = np.where(nontarget & validinfl)[0]
+    for n in cells:
 
         infl.append(grand[n])
 
@@ -256,6 +259,7 @@ for tn, info in group_map.items():
     nonTargetNearestPref = []
     nonTargetEnsembleDist = []
     nonTargetNearestDist = []
+
     cells = np.where(nontarget & validinfl)[0]
     for n in cells:
 
@@ -310,3 +314,23 @@ for tn, info in group_map.items():
     axes[0,1].set_title(f'spread {spatSpread:.1f} µm , avg r {avgCorr:.2f} , pref {avgPref:.0f}°',
                         fontsize=18, pad=10);
 
+
+# The pairing holds because both sides are indexed by the same cells array, in the same order:
+
+# cells = np.where(nontarget & validinfl)[0] — sorted ROI indices, fixed order
+# The for n in cells: loop appends one value per iteration, so nonTargetEnsembleDist[k] corresponds to cells[k]
+# inflAll[cells, ci] uses that same array as a fancy index, so element k is inflAll[cells[k], ci] — the same ROI
+# Both are length len(cells) with matching positions. The contrast is correct because ci comes from enumerate(contrasts) where contrasts = dat.influence[tn]['labels'], and labels is built in column order by influence_by_contrast (bins = [... for c in s.contrasts] at photostim.py:569), so column ci is contrast labels[ci].
+
+# To verify rather than trust it, assert inside the plotting loop:
+
+
+# assert len(x) == len(cells)
+# k = 5  # any index
+# assert np.isclose(nonTargetEnsembleDist[k],
+#                   np.linalg.norm(dat.roiLocs[cells[k]] - avgLoc))
+# The fragile part isn't the indexing — it's that the lists are built by append in one loop and consumed in another. If you ever add a continue inside the cell loop, the lists would silently go out of sync with cells while staying plausible. Converting to arrays computed directly from cells removes that failure mode entirely:
+
+
+# nonTargetEnsembleDist = np.linalg.norm(dat.roiLocs[cells] - avgLoc, axis=1)
+# That one is a direct vectorization; the nearest-target and correlation quantities need the loop, but you could assemble them as np.array(...) right after and assert the lengths match once.

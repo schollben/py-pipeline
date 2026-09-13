@@ -7,7 +7,8 @@ def getOffsetFrames(session_name):
 
     offset_frames = {}
     offset_frames['TSeries-07132025-1042-003.h5'] = -15
-    offset_frames['TSeries-07132025-1042-001.h5'] = -15
+    offset_frames['TSeries-11032024-1313-001.h5'] = -15
+    offset_frames['TSeries-11032024-1313-003.h5'] = -15
 
     if session_name not in offset_frames:
         #default
@@ -20,7 +21,8 @@ def removeROIs(session_name):
 
         roi = {}
         roi['TSeries-07132025-1042-003.h5'] = [54]
-        roi['TSeries-07132025-1042-001.h5'] = []
+        roi['TSeries-11032024-1313-001.h5'] = []
+        roi['TSeries-11032024-1313-003.h5'] = []
 
         if session_name not in roi:
             #default
@@ -33,7 +35,8 @@ def getWindow(session_name):
 
     windows = {}
     windows['TSeries-07132025-1042-003.h5'] = ((0, 0.25), (1.15, 1.4))
-    windows['TSeries-07132025-1042-001.h5'] = ((0, 0.25), (1.15, 1.4))
+    windows['TSeries-11032024-1313-001.h5'] = ((0, 0.2), (1.15, 1.4))
+    windows['TSeries-11032024-1313-003.h5'] = ((0, 0.2), (1.15, 1.4))
 
     if session_name not in windows:
         #default

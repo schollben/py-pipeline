@@ -14,12 +14,16 @@ def photostim_group_map(s):
 
     Returns a dict keyed by real `target_number` (float), each value a dict:
         power        - laser power (mW) of the real group
-        sham         - target_number of the paired sham group (power == 0)
+        sham         - target_number of the paired sham group (power == 0), or
+                       None when the session ran no sham at all
         target_rois  - sorted array of ROI indices targeted by this group
 
     Pairing uses `markpoints_group_info` columns [condition_idx, unique_group_id,
     n_targets, dispersion]: conditions sharing a unique_group_id target the same
     cells, so a power>0 condition and its power==0 sibling are the real/sham pair.
+    A real group with no sham sibling falls back to the session's sham pool rather
+    than being dropped; a session with no sham anywhere gets sham=None, and
+    `influence_grand` then uses a baseline z-score instead (mode='zscore').
     `target_number` is assumed to be `condition_idx + offset` where `offset` is
     derived from the data (min unique target_number), not hard-coded.
     """
@@ -43,6 +47,13 @@ def photostim_group_map(s):
     mp_cond = s.markpoints_condition_idx      # (n_points,) condition per markpoint
     mp_roi = s.markpoint_assigned_roi         # (n_points,) ROI per markpoint, -1=none
 
+    # shams pooled across the whole session, for real groups that have no sham
+    # sibling of their own. The influence functions already pool every sham into
+    # one reference (they measure the same null), so a shared sham is correct
+    # downstream — a real group must not be dropped just because it lacks a pair.
+    session_shams = [c for c in cond_idx if powers[c] == 0]
+    warned_pooled = False
+
     result = {}
     for ci in cond_idx:
         if powers[ci] <= 0:
@@ -50,9 +61,19 @@ def photostim_group_map(s):
         uid = unique_group_id[ci]
         sibling_conds = cond_idx[unique_group_id == uid]
         sham_conds = [c for c in sibling_conds if powers[c] == 0]
-        if not sham_conds:
-            continue
-        sham_cond = sham_conds[0]
+        if sham_conds:
+            sham_cond = sham_conds[0]
+        elif session_shams:
+            sham_cond = session_shams[0]
+            if not warned_pooled:
+                print(f'[!] {s.exp_id}: one or more real photostim groups have no '
+                      f'sham sibling of their own; using the session sham pool '
+                      f'(condition {sham_cond}) as their reference.')
+                warned_pooled = True
+        else:
+            # no sham anywhere: legitimate for spontaneous + photostim sessions.
+            # influence_grand falls back to a baseline z-score (mode='zscore').
+            sham_cond = None
 
         target_rois = set()
         for c in sibling_conds:
@@ -63,7 +84,7 @@ def photostim_group_map(s):
         real_tn = cond_to_tn(ci)
         result[real_tn] = dict(
             power=float(powers[ci]),
-            sham=cond_to_tn(sham_cond),
+            sham=cond_to_tn(sham_cond) if sham_cond is not None else None,
             target_rois=np.array(sorted(target_rois), dtype=int),
         )
     return result
@@ -342,6 +363,15 @@ def influence_grand(s, baseline_guard_sec=None, post_sec=None,
             influence[cell] = (mean(resp_real) - mean(sham_all)) / std(sham_all)
         mode='diff':
             influence[cell] =  mean(resp_real) - mean(sham_all)
+        mode='zscore' (no sham in the session):
+            influence[cell] = (mean(resp_real) - mean(all_trials))
+                              / std(all_trials)
+
+    `zscore` is for spontaneous + photostim sessions, which are typically run
+    without a sham group: with no null condition to difference against, each cell
+    is scored against its own response distribution across every photostim trial.
+    It is selected automatically (with a warning) when the session has no sham and
+    'dprime' or 'diff' was requested. `clip_sham` does not apply to it.
 
     All shams are pooled into one reference per cell: they differ only in which
     targets were addressed at zero power, so they measure the same null, and
@@ -377,16 +407,49 @@ def influence_grand(s, baseline_guard_sec=None, post_sec=None,
     Sets s.influence = {real_tn: {'grand': (n_cells,), 'kind': 'grand',
     'mode': mode}} and returns the same dict.
     """
-    if mode not in ('dprime', 'diff'):
-        raise ValueError("mode must be 'dprime' or 'diff'")
+    if mode not in ('dprime', 'diff', 'zscore'):
+        raise ValueError("mode must be 'dprime', 'diff' or 'zscore'")
     if good_only and s.is_good_cell is None:
         raise ValueError(
             f'{s.exp_id}: good_only=True but the session has no is_good_cell '
             f'flag; run compute_snr(...) first or pass good_only=False.')
+    if not s.has_sham and mode != 'zscore':
+        # spontaneous + photostim sessions are typically run without a sham, so
+        # there is no null condition to difference against. Fall back to the
+        # sham-free z-score rather than returning all-NaN.
+        print(f'[!] {s.exp_id}: no sham (0 mW) condition in this session; '
+              f"mode='{mode}' has no reference to compare against. Using "
+              f"mode='zscore' (each cell against its own across-trial null).")
+        mode = 'zscore'
     gmap = photostim_group_map(s)
     grp = cyc_trial_group(s)
     resps, base_sl, peak_sl = _influence_trial_resps(
         s, baseline_guard_sec, post_sec, baseline, peak)
+
+    if mode == 'zscore':
+        # No sham to reference. Each cell is scored against its own response
+        # distribution over every photostim trial in the session: a cell the
+        # stimulation does not drive contributes only its trial-to-trial noise,
+        # so that spread is the null. A cell driven on most trials shrinks its
+        # own sigma, making this conservative rather than anti-conservative.
+        all_trials = np.concatenate(
+            [group_trial_resp(s, tn, grp, base_sl, peak_sl, resps).reshape(s.n_rois, -1)
+             for tn in sorted(gmap)], axis=1)             # (n_cells, n_trials)
+        mean_ref = np.nanmean(all_trials, axis=1)         # (n_cells,)
+        sigma_ref = np.nanstd(all_trials, axis=1, ddof=1)  # (n_cells,)
+
+        influence = {}
+        for real_tn, info in gmap.items():
+            resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl, resps)
+            mean_real = np.nanmean(resp_real, axis=(1, 2))
+            with np.errstate(invalid='ignore', divide='ignore'):
+                grand = np.where(sigma_ref > 0,
+                                 (mean_real - mean_ref) / sigma_ref, np.nan)
+            if good_only:
+                grand = np.where(np.asarray(s.is_good_cell, dtype=bool), grand, np.nan)
+            influence[real_tn] = dict(grand=grand, kind='grand', mode=mode)
+        s.influence = influence
+        return influence
 
     # one common sham reference for every group: all sham (0 mW) trials pooled.
     # Shams differ only in which targets were addressed at zero power, so they
