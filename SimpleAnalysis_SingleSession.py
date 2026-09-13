@@ -22,7 +22,7 @@ from analysis import info
 ################################################################
 
 # session_name = 'TSeries-07132025-1042-002.h5'
-session_name = 'TSeries-11032024-1313-003.h5' # 11032024-1313-003, -007, -012, -014, -017.
+session_name = 'TSeries-11032024-1313-001.h5' # 11032024-1313-003, -007, -012, -014, -017.
 folderName = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/'
 FNAME = folderName + session_name
 
@@ -30,8 +30,9 @@ FNAME = folderName + session_name
 ################################################################
 
 dat = load_session(FNAME)
-print(f'{dat.exp_id}: {dat.n_rois} ROIs, '
-      f'{len(dat.directions)} directions, {len(dat.contrasts)} contrasts')
+print(f'{dat.exp_id}: {dat.n_rois} ROIs, {dat.session_type} session')
+if dat.has_visual:
+    print(f'   {len(dat.directions)} directions, {len(dat.contrasts)} contrasts')
 if dat.has_photostim==False:
     print("NO photostimulation data")
 
@@ -88,23 +89,20 @@ for n in remove_rois:
     dat.is_good_cell[n] = False
 
 
-# %% 3. tuning curves + preferred direction (double-Gaussian fit) + preference map
-# skipped on a photostim-only session: no visual drive, so no tuning to measure
-
-# and compute direction / orientation selectivit
-if dat.has_visual:
-    plot_tuning_curves(dat);
-    compute_selectivity(dat)
-    #preference maps (direction | orientation)
-    plot_preference_maps(dat, thr=0.1);
-else:
-    print(f'{dat.exp_id}: {dat.session_type} session — skipping tuning (no visual stimulus)')
-
-
-# %% 4. photostimulation group dF/F activity
+# %% photostimulation group dF/F activity
 
 describe_photostim_groups(dat)
 plot_photostim_target_traces(dat, baseline=baseline, peak=peak); 
+
+
+# %% tuning curves + preferred direction (double-Gaussian fit) + preference map
+# skipped on a photostim-only session: no visual drive, so no tuning to measure
+
+# and compute direction / orientation selectivity
+plot_tuning_curves(dat);
+compute_selectivity(dat)
+#preference maps (direction | orientation)
+plot_preference_maps(dat, thr=0.1);
 
 
 # %% examine nontarget-target relationships (independent of contrast) 

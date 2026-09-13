@@ -154,6 +154,12 @@ def check_real_sham_ordering(s, base_sl=None, peak_sl=None, verbose=True):
         return float(np.nanmean(np.nanmax(tr[..., peak_sl], axis=-1)
                                 - np.nanmean(tr[..., base_sl], axis=-1)))
 
+    if not s.has_sham:
+        if verbose:
+            print(f'{s.exp_id}: no sham condition in this session — nothing to '
+                  f'check real/sham ordering against.')
+        return True
+
     ok = True
     for real_tn, info in sorted(gmap.items()):
         rois = info['target_rois']
@@ -183,9 +189,12 @@ def describe_photostim_groups(s):
     print(f'=== Photostimulation groups: {s.exp_id} ===')
     for real_tn, info in sorted(gmap.items()):
         n_real = int(np.sum(grp == real_tn))
-        n_sham = int(np.sum(grp == info['sham']))
+        sham_tn = info['sham']
+        sham_txt = ('none (no sham in session)' if sham_tn is None
+                    else f'{sham_tn:g}')
+        n_sham = 0 if sham_tn is None else int(np.sum(grp == sham_tn))
         print(f'  group {real_tn:g} (power={info["power"]:.0f} mW)  '
-              f'paired sham={info["sham"]:g}  '
+              f'paired sham={sham_txt}  '
               f'targets={info["target_rois"].tolist()}  '
               f'trials: real={n_real} sham={n_sham}')
 
@@ -663,6 +672,11 @@ def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
     """
     if by not in ('grand', 'stim'):
         raise ValueError("by must be 'grand' or 'stim'")
+    if not s.has_sham:
+        raise ValueError(
+            f'{s.exp_id}: influence_bootstrap resamples real against sham trials, '
+            f'but this session has no sham (0 mW) condition. Use '
+            f"influence_grand(mode='zscore') for a sham-free estimate.")
 
     point = (influence_grand if by == 'grand' else influence_by_stim)(
         s, baseline_guard_sec, post_sec, baseline, peak)
@@ -987,8 +1001,10 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
                            color='0.5', alpha=0.15, lw=0)
                 ax.axvspan(peak_sl.start * fp, peak_sl.stop * fp,
                            color='gold', alpha=0.2, lw=0)
-            for tn, color, label in ((real_tn, _TARGET_COLOR, 'real'),
-                                     (sham_tn, _NONTARGET_COLOR, 'sham')):
+            traces = [(real_tn, _TARGET_COLOR, 'real')]
+            if sham_tn is not None:
+                traces.append((sham_tn, _NONTARGET_COLOR, 'sham'))
+            for tn, color, label in traces:
                 mean, sem = mean_sem(roi, tn)
                 ax.plot(xf, mean[f0:f1], color=color, lw=1,
                         label=(label if not legended else None))
