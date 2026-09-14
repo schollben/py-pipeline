@@ -4,12 +4,13 @@ import h5py
 import numpy as np
 import plotly.graph_objects as go
 
-
 dirLoc = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/' # update for your computer
-FNAME = dirLoc + 'TSeries-07212026-1350-003.h5'
+# FNAME = dirLoc + 'TSeries-07132025-1042-003.h5'
+# FNAME = dirLoc + 'TSeries-07212026-1350-001.h5'
+FNAME = dirLoc + 'TSeries-11032024-1313-012.h5'
 
-OFFSET = 10
-ROI = 2
+OFFSET = 15
+ROI = 21
 frameStart, frameEnd = 0, 2000
 
 with h5py.File(FNAME, 'r') as f:

@@ -6,11 +6,15 @@
 def getOffsetFrames(session_name):
 
     offset_frames = {}
+
     offset_frames['TSeries-07132025-1042-003.h5'] = -15
-    offset_frames['TSeries-11032024-1313-001.h5'] = -(10+150) #lost first event??
-    offset_frames['TSeries-11032024-1313-003.h5'] = -(10 + 60) #lost first event?? 
-    offset_frames['TSeries-11032024-1313-007.h5'] = -(10 + 90) #lost first event?? 
-    offset_frames['TSeries-11032024-1313-014.h5'] = -(10 + 90)
+
+    offset_frames['TSeries-11032024-1313-001.h5'] = -(10 + 150) #lost first event??
+    offset_frames['TSeries-11032024-1313-003.h5'] = -10 #lost first event?? 
+    offset_frames['TSeries-11032024-1313-007.h5'] = -10 #lost first event?? 
+    offset_frames['TSeries-11032024-1313-012.h5'] = -10
+
+    offset_frames['TSeries-07212026-1350-003.h5'] = -15
 
     if session_name not in offset_frames:
         #default
