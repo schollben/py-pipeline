@@ -2,6 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import hsv_to_rgb, LinearSegmentedColormap
 
+from .session import require_visual
+
 
 def _pastel(frac, sat):
     rgb = np.array(hsv_to_rgb([frac % 1.0, 1.0, 1.0]))
@@ -33,6 +35,7 @@ def _draw_map(ax, s, pref, period, flag, sat, title):
 
 
 def plot_preference_maps(s, thr=0.1, sat=0.5):
+    require_visual(s, 'plot_preference_maps')
     fig, (axd, axo) = plt.subplots(1, 2, figsize=(13, 6))
     _draw_map(axd, s, s.pref_dir, 360, s.gdsi >= thr, sat, 'Direction preference')
     _draw_map(axo, s, s.pref_dir, 180, s.gosi >= thr, sat, 'Orientation preference')

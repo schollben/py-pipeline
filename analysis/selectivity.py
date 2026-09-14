@@ -1,11 +1,14 @@
 import numpy as np
 
+from .session import require_visual
+
 
 def compute_selectivity(s):
     """Normalized vector strength at the top contrast (rectified responses).
 
     gDSI uses k=1 (direction), gOSI uses k=2 (orientation). Sets s.gdsi, s.gosi.
     """
+    require_visual(s, 'compute_selectivity')
     cons = s.contrasts
     top_ids = np.where(s.stim_table[:, 1] == cons[-1])[0]
     theta = np.deg2rad(s.stim_table[top_ids, 0])

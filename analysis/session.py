@@ -47,8 +47,17 @@ class Session:
     markpoints_group_info: np.ndarray = None
     markpoints_laser_power: np.ndarray = None
     markpoints_condition_idx: np.ndarray = None
+    # microscope optics (from Bruker_Acq)
+    optical_zoom: float = None
+    objective_mag: float = None
+    objective_na: float = None
+    # acquisition protocol flags (from params)
+    is_spontaneous: bool = None
+    stim_file_num: int = None
     # derived (filled by tools)
     pref_dir: np.ndarray = None
+    snr: np.ndarray = None
+    pref_stim: np.ndarray = None
     gdsi: np.ndarray = None
     gosi: np.ndarray = None
     fit_params: np.ndarray = None
@@ -70,6 +79,34 @@ class Session:
                 and self.markpoints_laser_power is not None)
 
     @property
+    def has_visual(self):
+        """True when the session presented a visual stimulus."""
+        return self.stim_properties is not None and self.stim_id is not None
+
+    @property
+    def has_sham(self):
+        """True when any photostim condition fired at 0 mW (a sham group).
+
+        Spontaneous + photostim sessions are typically run without one, so
+        influence has no sham reference to compare against (see `influence_grand`
+        mode='zscore').
+        """
+        if self.markpoints_laser_power is None:
+            return False
+        return bool(np.any(np.asarray(self.markpoints_laser_power) == 0))
+
+    @property
+    def session_type(self):
+        """'visual', 'photostim', or 'full' — which protocol this session ran."""
+        if self.has_visual and self.has_photostim:
+            return 'full'
+        if self.has_visual:
+            return 'visual'
+        if self.has_photostim:
+            return 'photostim'
+        return 'unknown'
+
+    @property
     def stim_table(self):
         """(n_stims, 2) — each unique_stims[i] -> (direction, contrast)."""
         if self._stim_table is None:
@@ -79,6 +116,21 @@ class Session:
                 table[i] = rows[0]
             self._stim_table = table
         return self._stim_table
+
+
+def require_visual(s, fn):
+    """Raise unless `s` presented a visual stimulus.
+
+    Tuning and contrast-resolved analyses have no meaning on a photostim-only
+    session. Without this the failure surfaces as a TypeError from `directions`
+    or `stim_table` operating on None, naming neither the session nor the cause.
+    """
+    if not s.has_visual:
+        raise ValueError(
+            f"{s.exp_id}: {fn} needs a visual stimulus, but this is a "
+            f"'{s.session_type}' session (no stim_properties). For a "
+            f"photostim-only session use: rebuild_cyc -> compute_responses -> "
+            f"influence_grand(mode='zscore') -> plot_influence_maps.")
 
 
 def load_session(path):
@@ -99,8 +151,49 @@ def load_session(path):
             if d is not None and d.size == 0:
                 d = None
             kw[k] = d
-    if kw['stim_properties'] is None or kw['stim_id'] is None:
-        raise ValueError(f'{exp_id}: no visual stimulus data in this session.')
+        # microscope optics
+        kw['optical_zoom'] = (float(f['Bruker_Acq']['optical_zoom'][()])
+                              if 'optical_zoom' in f['Bruker_Acq'] else None)
+        kw['objective_mag'] = (float(f['Bruker_Acq']['objective_mag'][()])
+                               if 'objective_mag' in f['Bruker_Acq'] else None)
+        kw['objective_na'] = (float(f['Bruker_Acq']['objective_na'][()])
+                              if 'objective_na' in f['Bruker_Acq'] else None)
+        # acquisition protocol flags: a spontaneous run has no visual stimulus
+        kw['is_spontaneous'] = (bool(f['params']['is_spontaneous'][()])
+                                if 'params' in f and 'is_spontaneous' in f['params']
+                                else None)
+        kw['stim_file_num'] = (int(f['params']['stim_file_num'][()])
+                               if 'params' in f and 'stim_file_num' in f['params']
+                               else None)
+
+    has_visual = kw['stim_properties'] is not None and kw['stim_id'] is not None
+    has_photostim = (kw['target_number'] is not None
+                     and kw['markpoints_laser_power'] is not None)
+    # three session types are run: photostim only (no visual stimulus), visual
+    # only, and the full protocol. Only a file with neither is unusable.
+    if not has_visual and not has_photostim:
+        raise ValueError(
+            f'{exp_id}: no visual stimulus and no photostimulation data in this '
+            f'session — nothing to analyse.')
+
+    if has_visual:
+        n_sp, n_si = len(kw['stim_properties']), len(kw['stim_id'])
+        if n_sp > n_si:
+            # the stimulus table is written in full when the run starts; an
+            # aborted recording leaves the trials that never played as surplus
+            # TRAILING rows. Verified per file by the invariant that every trial
+            # sharing a stim_id carries the same (direction, contrast): trimming
+            # the tail satisfies it, trimming the head does not.
+            print(f'[!] {exp_id}: stim_properties has {n_sp} rows but stim_id has '
+                  f'{n_si}; the recording stopped {n_sp - n_si} trial(s) before the '
+                  f'stimulus table ended. Truncating stim_properties to {n_si}.')
+            kw['stim_properties'] = kw['stim_properties'][:n_si]
+        elif n_sp < n_si:
+            raise ValueError(
+                f'{exp_id}: stim_properties ({n_sp} rows) is shorter than stim_id '
+                f'({n_si}); trial descriptors are missing, so direction/contrast '
+                f'cannot be assigned. Check the upstream extraction for this session.')
+
     return Session(path=path, exp_id=exp_id, n_rois=n_rois,
                    frame_period=frame_period, dur_resp=dur_resp, **kw)
 

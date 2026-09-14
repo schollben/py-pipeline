@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.optimize import curve_fit
 
-from .session import resp_grid
+from .session import resp_grid, require_visual
 
 
 def _wrap180(x):
@@ -44,6 +44,7 @@ def fit_direction_tuning(dirs, resps_top):
 
 
 def plot_tuning_curves(s, cells=None):
+    require_visual(s, 'plot_tuning_curves')
 
     if cells is None:
         cells = np.arange(s.n_rois)
