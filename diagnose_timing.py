@@ -4,12 +4,11 @@ import h5py
 import numpy as np
 import plotly.graph_objects as go
 
-# -012, -014, -017
 
 dirLoc = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/' # update for your computer
-FNAME = dirLoc + 'TSeries-11032024-1313-014.h5'
+FNAME = dirLoc + 'TSeries-07212026-1350-003.h5'
 
-OFFSET = 10 + 90
+OFFSET = 10
 ROI = 2
 frameStart, frameEnd = 0, 2000
 
@@ -38,12 +37,17 @@ fig.add_trace(go.Scatter(x=x, y=dff, name=f'ROI {ROI}',
 # fig.add_trace(go.Scatter(x=x, y=dff_nan, name='dff_nan', opacity=0.4,
 #                          line=dict(color='orange', width=2)))
 
+# stim_id / target_number are empty on sessions whose trial table was never built,
+# so label with them only where an entry exists
 for i in np.where((stim_on >= frameStart) & (stim_on < frameEnd))[0]:
+    lbl = f'#{i} sid={stim_id[i]:g}' if i < len(stim_id) else f'#{i}'
     fig.add_vline(x=stim_on[i], line=dict(color='royalblue', width=1, dash='dot'),
-                  annotation_text=f'#{i} sid={stim_id[i]:g}', annotation_font_size=8)
+                  annotation_text=lbl, annotation_font_size=8)
 
 for i in np.where((photostim >= frameStart) & (photostim < frameEnd))[0]:
-    fig.add_vline(x=photostim[i], line=dict(color='crimson', width=1, dash='dot'))
+    lbl = f'tn={target_number[i]:g}' if i < len(target_number) else None
+    fig.add_vline(x=photostim[i], line=dict(color='crimson', width=1, dash='dot'),
+                  annotation_text=lbl, annotation_font_size=8)
 
 fig.update_xaxes(title_text='2P frame')
 fig.update_yaxes(title_text='dF/F')
