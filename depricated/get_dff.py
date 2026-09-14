@@ -18,7 +18,6 @@ from sklearn.linear_model import HuberRegressor
 from tqdm import tqdm
 from img_utils import *
 
-
 save_location = '/mnt/md0/'
 data_type = 'BRUKER'
 date = '12172024'
