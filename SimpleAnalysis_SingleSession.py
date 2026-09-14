@@ -22,7 +22,7 @@ from analysis import info
 ################################################################
 
 # session_name = 'TSeries-07132025-1042-002.h5'
-session_name = 'TSeries-11032024-1313-003.h5' # 11032024-1313-003, -007, -012, -014, -017.
+session_name = 'TSeries-11032024-1313-001.h5' # 11032024-1313-003, -007, -012, -014, -017.
 folderName = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/'
 FNAME = folderName + session_name
 
@@ -84,6 +84,13 @@ peak=info.getWindow(session_name)[1]
 compute_responses(dat, baseline=baseline, peak=peak);
 compute_snr(dat, baseline=baseline, peak=peak, thresh = 1);
 
+# SNR scores visual responsiveness across stimulus conditions. On a photostim-only
+# session there is no visual drive (n_stims = photostim conditions), so SNR is
+# meaningless and rejects nearly every cell — keep them all.
+if not dat.has_visual:
+    dat.is_good_cell[:] = True
+
+# remove bad identified ROIs
 remove_rois = info.removeROIs(session_name)
 for n in remove_rois:
     dat.is_good_cell[n] = False
@@ -99,8 +106,8 @@ plot_photostim_target_traces(dat, baseline=baseline, peak=peak);
 # skipped on a photostim-only session: no visual drive, so no tuning to measure
 
 # and compute direction / orientation selectivity
-plot_tuning_curves(dat);
-compute_selectivity(dat)
+plot_tuning_curves(dat); 
+compute_selectivity(dat); 
 #preference maps (direction | orientation)
 plot_preference_maps(dat, thr=0.1);
 

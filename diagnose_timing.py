@@ -4,17 +4,20 @@ import h5py
 import numpy as np
 import plotly.graph_objects as go
 
-dirLoc = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/' # update for your computer
-FNAME = dirLoc + 'TSeries-11032024-1313-001.h5'
+# 11032024-1313-007, -012, -014, -017
 
-ROI = 10
+dirLoc = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/' # update for your computer
+FNAME = dirLoc + 'TSeries-11032024-1313-007.h5'
+
+OFFSET = 10 + 90
+ROI = 2
 frameStart, frameEnd = 0, 2000
 
 with h5py.File(FNAME, 'r') as f:
     dff = f['dff'][frameStart:frameEnd, ROI]
     dff_nan = f['dff_nan'][frameStart:frameEnd, ROI]
-    stim_on = f['stim_on_2p_frame'][:].ravel() - 10
-    photostim = f['photostim_2p_frame'][:].ravel() - 10
+    stim_on = f['stim_on_2p_frame'][:].ravel() - OFFSET
+    photostim = f['photostim_2p_frame'][:].ravel() - OFFSET
     stim_id = f['stim_id'][:].ravel()
     target_number = f['target_number'][:].ravel()
     frame_period = float(f['Bruker_Acq']['frame_period'][()])

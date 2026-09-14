@@ -180,13 +180,59 @@ The loader now truncates to `len(stim_id)` and warns. No upstream action strictl
 required, but the writer should ideally record the presented trial count rather
 than the planned one.
 
-### `11032024-1313-003` — most damaged of the working files
+### `11032024-1313-003` — PHOTOSTIM LABELLING UNUSABLE
 
-Beyond the 144-trial truncation, `target_number` (635) **exceeds** `stim_id` (492):
-photostim events were logged for trials whose visual presentation never happened.
-`cyc_trial_group` warns and truncates to the shorter. Usable for grand-average
-influence; **not** trustworthy for contrast-resolved analysis until this is
-resolved upstream.
+Beyond the 144-trial truncation, `target_number` (635) **exceeds** `stim_id` (492)
+by 143: photostim assignments were planned for trials whose presentation never
+happened. `cyc_trial_group` warns and truncates to the shorter, but that
+truncation does not restore the correspondence.
+
+Checking which ROIs each group actually drives — cond 1 (`target_number`=2)
+targets ROIs 0–4, cond 2 (`target_number`=3) targets ROIs 5–9:
+
+```
+tn     power     ROIs 0-4   ROIs 5-9
+ 1    0 (sham)    0.1110     0.1236     <- sham HIGHEST in both sets
+ 2    75          0.1008     0.1134
+ 3    75          0.0933     0.1068
+```
+
+The sham exceeds both real groups everywhere, and neither real group is selective
+for its own targets. Shifting the alignment by 1 or 2 trials barely moves these
+numbers — the labels are **decorrelated from the data**, not displaced. With a
+143-entry gap out of 635, trial *k* stops corresponding to trial *k* at the first
+divergence, so no uniform offset can repair it.
+
+**Do not use this session for any photostim analysis** until the writer is fixed.
+Its visual side is fine after the `stim_properties` truncation, so visual tuning
+remains valid.
+
+### Dropped first photostim TTL — `11032024-1313-001` and `-003`
+
+In both files a real photostim event fired exactly one ITI before the first
+recorded TTL, with no TTL saved for it. Detected from raw fluorescence: the PMT
+shutter closes during photostim, so mean raw F dips sharply.
+
+| File | inferred event | dip there | dip at known TTLs | nearby controls |
+|---|---|---|---|---|
+| `11032024-1313-001` | frame 769 (= 919 − 150) | 23.4% | median 23.8% | 4–6% |
+| `11032024-1313-003` | frame 348 (= 408 − 60) | 35.5% | median 24.7%, 5–95% [11.6, 32.5] | −1 to 1.5% |
+
+Both sit inside the known-TTL distribution; controls a few frames away are near
+zero. Two ITIs back in `-001` gives 12.5%, below the population — so exactly one
+trial was dropped, not more.
+
+Corroborated in `-003` by the block structure: the first `target_number` block
+runs 31 entries where every other runs 32, and the first `target_trial` block runs
+95 where every other runs 96.
+
+In `-001` the arrays are shifted rather than short: `photostim_triggers_sec` has
+36 entries vs 35 for `stim_on_2p_frame`, and the last two land at frames 6001 and
+6151 — past the 5975-frame recording — both clamped to 5974. The sequence
+overruns the end by exactly what it is missing at the start.
+
+**`-001` is recoverable** (one dropped leading TTL, otherwise self-consistent).
+**Upstream:** stop dropping the first TTL when writing the `.h5`.
 
 ### `target_number` one short of `stim_id`
 
@@ -194,6 +240,18 @@ resolved upstream.
 spurious-first-TTL case that `dropFirstEvents` handles at runtime. Consistent
 enough across files to look like convention — worth confirming it is intentional,
 since `photostim_group_map` consumes `target_number`.
+
+### Mismatch scan across all loading files
+
+Only `-003` has a large gap; every other file is within ±1. Blocking is not itself
+a problem — `-012` and `-007` are blocked and fine.
+
+```
+07132025-1042-003  240/239   -1  interleaved   ok
+11032024-1313-012  384/383   -1  BLOCKED       ok
+11032024-1313-007  383/383    0  BLOCKED       ok
+11032024-1313-003  492/635 +143  BLOCKED       *** UNUSABLE ***
+```
 
 ---
 
