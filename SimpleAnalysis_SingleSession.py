@@ -21,8 +21,8 @@ from analysis import info
 
 ################################################################
 
-# session_name = 'TSeries-07132025-1042-002.h5'
-session_name = 'TSeries-11032024-1313-001.h5' # 11032024-1313-003, -007, -012, -014, -017.
+session_name = 'TSeries-07132025-1042-003.h5'
+# session_name = 'TSeries-11032024-1313-014.h5'
 folderName = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/'
 FNAME = folderName + session_name
 
@@ -109,19 +109,19 @@ plot_photostim_target_traces(dat, baseline=baseline, peak=peak);
 plot_tuning_curves(dat); 
 compute_selectivity(dat); 
 #preference maps (direction | orientation)
-plot_preference_maps(dat, thr=0.1);
+plot_preference_maps(dat, thr=0.1); 
 
 
-# %% examine nontarget-target relationships (independent of contrast) 
-# influence: grand average across all stimulus conditions -> 
+# %% influence: grand average across all stimulus conditions -> 
 # windows are inherited from compute_responses above (via dat.resps), so influence
 # and resp always measure the same thing; pass baseline=/peak= here only to override (not recommended)
 
 influence_grand(dat, good_only=True, mode='dprime') # mode: diff or dprim or z-score
 group_map = photostim_group_map(dat)
-
 plot_influence_maps(dat, vlim=0.5); 
 
+
+# %% examine nontarget-target relationships (independent of contrast) 
 # loop through ensembles
 for tn, info in group_map.items():
 

@@ -4,10 +4,10 @@ import h5py
 import numpy as np
 import plotly.graph_objects as go
 
-# 11032024-1313-007, -012, -014, -017
+# -012, -014, -017
 
 dirLoc = '/Users/benjaminscholl/Dropbox/projects/2poptostim/PROCESSED/V1/' # update for your computer
-FNAME = dirLoc + 'TSeries-11032024-1313-007.h5'
+FNAME = dirLoc + 'TSeries-11032024-1313-014.h5'
 
 OFFSET = 10 + 90
 ROI = 2
