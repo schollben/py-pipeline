@@ -161,8 +161,56 @@ def filter_baseline_dF_comp(raw, pts = 99):
     raw_newlpf = prctfilt1(raw_new, 91)
 
     raw_new = raw_new - raw_newlpf
-    
+
     return raw_new
+
+def plot_raw_dff(raw_cell_traces, dff, cells, pts=99*4+1):
+    '''
+    Plot raw fluorescence and dF/F side by side for chosen cells, to sanity
+    check trace extraction.
+
+    Parameters:
+        raw_cell_traces (np.array): (frames, cells) raw traces.
+        dff (np.array): (frames, cells) dF/F traces.
+        cells (int or list): cell index or indices to plot.
+        pts (int): median filter window, must match what was passed to
+            filter_baseline_dF_comp so the overlaid baseline is meaningful.
+    '''
+    cells = np.atleast_1d(cells)
+
+    fig, axes = plt.subplots(len(cells), 2, figsize=(14, 2.5*len(cells)),
+                             sharex=True, squeeze=False)
+
+    for row, cc in enumerate(cells):
+        raw = raw_cell_traces[:, cc]
+
+        # baseline recomputed as in filter_baseline_dF_comp
+        pad = np.concatenate((np.repeat(np.mean(raw[2:5]), pts), raw,
+                              np.repeat(np.mean(raw[-5:-2]), pts)))
+        baseline = signal.medfilt(pad, pts)[pts:-pts]
+
+        axes[row, 0].plot(raw, lw=0.5, color='k')
+        axes[row, 0].plot(baseline, lw=1.5, color='r')
+        axes[row, 0].set_ylabel(f'cell {cc}\nraw F')
+
+        axes[row, 1].plot(dff[:, cc], lw=0.5, color='b')
+        axes[row, 1].axhline(0, color='gray', lw=0.5)
+        axes[row, 1].set_ylabel('dF/F')
+
+        print(f'cell {cc}: raw {raw.min():.1f}-{raw.max():.1f} '
+              f'(mean {raw.mean():.1f}), baseline {baseline.min():.1f}-'
+              f'{baseline.max():.1f}, dff {dff[:, cc].min():.2f}-'
+              f'{dff[:, cc].max():.2f}, '
+              f'{np.sum(~np.isfinite(dff[:, cc]))} non-finite')
+
+    axes[0, 0].set_title('raw F (black) + median baseline (red)')
+    axes[0, 1].set_title('dF/F')
+    axes[-1, 0].set_xlabel('frame')
+    axes[-1, 1].set_xlabel('frame')
+    plt.tight_layout()
+    plt.show()
+
+    return fig
 
 def replace_missing_frame_triggers(frame_triggers):
     '''
