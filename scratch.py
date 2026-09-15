@@ -20,7 +20,7 @@ import h5py
 import matplotlib.pyplot as plt
 from img_utils import (filter_baseline_dF_comp, plot_raw_dff)
 
-with h5py.File('/home/schollab-gaga/Desktop/2p_ROI.h5', 'r') as f:
+with h5py.File('/mnt/bigdata/SCANIMAGE_LOCAL/test/test2p_ROI.h5', 'r') as f:
     dff_saved = f['dff'][:]          # computed by the old version
     raw       = f['raw_cell_traces'][:]
 

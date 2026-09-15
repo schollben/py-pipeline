@@ -97,13 +97,14 @@ for f_i in tqdm(range(math.ceil(num_frames / chnk)), desc="Extracting...", ncols
 
 ## Getting dF/F from raw traces
 fs = 30 # ASSUMING 30Hz (typical unless using mROI or z stacks)
+fo_win = 60.0 #in seconds
 dff = np.zeros((num_frames, num_cells))
 baselines = np.zeros((num_frames, num_cells))
 for cc in tqdm(range(num_cells), desc="Getting dF/F per cell...", ncols=75):
-    dff[:,cc], baselines[:,cc] = filter_baseline_dF_comp(raw_cell_traces[:,cc], fs=fs, win_sec=60.0)
+    dff[:,cc], baselines[:,cc] = filter_baseline_dF_comp(raw_cell_traces[:,cc], fs=fs, win_sec=fo_win)
 
 if do_neuropil:
-    dff_neuropil = filter_baseline_dF_comp(raw_neuropil, fs=fs, win_sec=60.0)
+    dff_neuropil = filter_baseline_dF_comp(raw_neuropil, fs=fs, win_sec=fo_win)
 
 # Save results so far
 outfile.create_dataset('raw_cell_traces', data=raw_cell_traces)

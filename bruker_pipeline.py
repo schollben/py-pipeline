@@ -541,17 +541,12 @@ def process_experiment(
     # -----------------------------------------------------------------------
     # Step 8 — Compute dF/F
     # -----------------------------------------------------------------------
-    # Baseline window: ~13 seconds, scaled to actual frame rate.
-    # Must be odd for the percentile filter.
-    dff_baseline_sec = 13.2
-    dff_window = int(round(dff_baseline_sec / frame_period))
-    if dff_window % 2 == 0:
-        dff_window += 1
-    print(f'dF/F baseline window: {dff_window} frames '
-          f'({dff_window * frame_period:.1f} s at {1/frame_period:.1f} Hz)')
+    win_sec = 15 # Baseline window
+    fs = 1/frame_period
     dff = np.zeros((num_frames, num_cells))
+    baselines = np.zeros((num_frames, num_cells))
     for cc in tqdm(range(num_cells), desc='Computing dF/F', ncols=75):
-        dff[:, cc] = filter_baseline_dF_comp(raw_traces[:, cc], dff_window)
+        dff[:, cc], baselines[:, cc] = filter_baseline_dF_comp(raw_traces[:, cc], fs, win_sec)
 
     # Sanitize divide-by-~0 artefacts: replace any inf/NaN with NaN so the
     # downstream nanmean/nanstd response machinery handles them gracefully
@@ -563,9 +558,10 @@ def process_experiment(
 
     dff_neuropil = None
     if do_neuropil:
-        dff_neuropil = filter_baseline_dF_comp(raw_neuropil, dff_window)
+        dff_neuropil, _ = filter_baseline_dF_comp(raw_neuropil, fs, win_sec)
 
     result['dff'] = dff
+    result['baselines'] = baselines
     result['params']['dff_window_frames'] = dff_window
     result['params']['dff_window_sec']    = dff_window * frame_period
     if do_neuropil:
