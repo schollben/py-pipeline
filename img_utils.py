@@ -15,7 +15,7 @@ import matplotlib
 matplotlib.use('TkAgg')
 from matplotlib import pyplot as plt
 
-from scipy import signal
+from scipy import ndimage, signal
 from statistics import median
 from skimage.draw import polygon2mask
 
@@ -146,7 +146,66 @@ def prctfilt1(x, n=3, blksz=1000, dim=None):
         
     return y
 
-def filter_baseline_dF_comp(raw, pts = 99):
+def filter_baseline_dF_comp(raw, fs=30.0, win_sec=45.0, pct=30, f0_floor=None,
+                            smooth_sec=0.0):
+    '''
+    Compute dF/F with a slow, robust baseline that tolerates large sustained
+    shifts in resting fluorescence.
+
+    Designed for traces where F0 itself moves several-fold over a recording and
+    where cells may be active a large fraction of the time. Uses a running
+    percentile (not a median) so dense activity does not pull the baseline up,
+    over a window long enough that multi-second events ride on top of it rather
+    than being absorbed.
+
+    Parameters:
+        raw (np.array): 1D raw fluorescence trace.
+        fs (float): sampling rate in Hz (15-30 typical).
+        win_sec (float): baseline window in seconds. Must be several times
+            longer than the slowest event to be preserved, but short enough to
+            follow real drift in resting F.
+        pct (float): percentile taken as the resting level. Lower is more
+            robust to dense activity; too low biases F0 under rest and
+            inflates dF/F.
+        f0_floor (float): minimum allowed F0. Guards the division where the
+            baseline approaches zero, which would otherwise amplify noise
+            without limit. Defaults to the 1st percentile of raw.
+        smooth_sec (float): optional gaussian smoothing of the signal before
+            the division, in seconds. 0 disables.
+
+    Returns:
+        raw_new (np.array): dF/F, same length as raw.
+        baseline (np.array): the estimated F0 actually used.
+    '''
+    raw = np.asarray(raw, dtype=float)
+    win = max(3, int(round(win_sec * fs)))
+
+    # reflect at the edges so the ends are not dragged toward a constant;
+    # this also avoids the old padding scheme, where a large artifact in the
+    # first few frames corrupted the whole leading segment.
+    baseline = ndimage.percentile_filter(raw, percentile=pct, size=win,
+                                         mode='reflect')
+
+    # the percentile filter is piecewise-flat; smooth so F0 is continuous.
+    # sigma is a fraction of the window, so F0 still cannot track an event.
+    baseline = ndimage.gaussian_filter1d(baseline, sigma=win / 6.0,
+                                         mode='reflect')
+
+    # a near-zero denominator turns ordinary shot noise into huge dF/F spikes
+    if f0_floor is None:
+        f0_floor = max(np.percentile(raw, 1), 1e-6)
+    baseline = np.maximum(baseline, f0_floor)
+
+    sig = raw
+    if smooth_sec > 0:
+        sig = ndimage.gaussian_filter1d(raw, sigma=smooth_sec * fs,
+                                        mode='reflect')
+
+    raw_new = (sig - baseline) / baseline
+    return raw_new, baseline
+
+
+def filter_baseline_dF_comp_oldver(raw, pts = 99):
     F_temp = raw
     F_temp = np.concatenate((np.repeat(np.mean(F_temp[2:5]),pts),F_temp))
     F_temp = np.concatenate((F_temp, np.repeat(np.mean(F_temp[-5:-2]),pts)))
@@ -154,17 +213,17 @@ def filter_baseline_dF_comp(raw, pts = 99):
     F_temp = signal.medfilt(F_temp, pts)
     # remove padding
     raw_new = F_temp[pts:-pts]
-    #code.interact(local=dict(globals(), **locals()))
     raw_new = np.divide((raw - raw_new), raw_new)
     
     #raw_newlpf = signal.medfilt(raw_new, 91)
     raw_newlpf = prctfilt1(raw_new, 91)
-
     raw_new = raw_new - raw_newlpf
 
     return raw_new
 
-def plot_raw_dff(raw_cell_traces, dff, cells, pts=99*4+1):
+
+
+def plot_raw_dff(raw_cell_traces, dff, cells, pts=99*4+1, baselines=None):
     '''
     Plot raw fluorescence and dF/F side by side for chosen cells, to sanity
     check trace extraction.
@@ -184,10 +243,13 @@ def plot_raw_dff(raw_cell_traces, dff, cells, pts=99*4+1):
     for row, cc in enumerate(cells):
         raw = raw_cell_traces[:, cc]
 
-        # baseline recomputed as in filter_baseline_dF_comp
-        pad = np.concatenate((np.repeat(np.mean(raw[2:5]), pts), raw,
-                              np.repeat(np.mean(raw[-5:-2]), pts)))
-        baseline = signal.medfilt(pad, pts)[pts:-pts]
+        if baselines is not None:
+            baseline = baselines[:, cc]
+        else:
+            # fall back to recomputing as filter_baseline_dF_comp_oldver did
+            pad = np.concatenate((np.repeat(np.mean(raw[2:5]), pts), raw,
+                                  np.repeat(np.mean(raw[-5:-2]), pts)))
+            baseline = signal.medfilt(pad, pts)[pts:-pts]
 
         axes[row, 0].plot(raw, lw=0.5, color='k')
         axes[row, 0].plot(baseline, lw=1.5, color='r')
