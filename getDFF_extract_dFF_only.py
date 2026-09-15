@@ -100,9 +100,6 @@ dff = np.zeros((num_frames, num_cells))
 for cc in tqdm(range(num_cells), desc="Getting dF/F per cell...", ncols=75):
     dff[:,cc] = filter_baseline_dF_comp(raw_cell_traces[:,cc], 99*4+1)
 
-# check traces
-plot_raw_dff(raw_cell_traces, dff, [0, 1, 2, 3])
-
 if do_neuropil:
     dff_neuropil = filter_baseline_dF_comp(raw_neuropil, 99*4+1)
 
