@@ -6,3 +6,6 @@ robustfit_test_plots
 
 # Other Python materials not required
 __pycache__
+
+# Personal test/scratch scripts
+/local_scripts
