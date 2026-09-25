@@ -10,21 +10,42 @@ _TARGET_COLOR = 'purple'
 _NONTARGET_COLOR = 'gray'
 
 
-def photostim_group_map(s):
-    """Map each REAL (power > 0) photostim group to its paired sham group.
+def _tn_offset(s):
+    """`target_number = condition_idx + offset`, with `offset` derived from the
+    data (min unique target_number vs min condition_idx), not hard-coded."""
+    cond_idx = s.markpoints_group_info[:, 0].astype(int)
+    return int(round(np.unique(s.target_number).min())) - int(cond_idx.min())
 
-    Returns a dict keyed by real `target_number` (float), each value a dict:
+
+def sham_target_numbers(s):
+    """Target numbers of every sham (0 mW) condition: the pooled sham reference.
+
+    A sham fires at zero power, so every sham measures the same null (visual
+    drive only, nothing stimulated) whichever targets it addressed. Shams are
+    therefore never paired per group: every real-vs-sham comparison pools all of
+    them. Empty when the session ran no sham (spontaneous + photostim sessions);
+    the influence functions then fall back to mode='zscore'.
+    """
+    if not s.has_photostim:
+        return []
+    cond_idx = s.markpoints_group_info[:, 0].astype(int)
+    powers = s.markpoints_laser_power
+    offset = _tn_offset(s)
+    return sorted(int(c) + offset for c in cond_idx if powers[c] == 0)
+
+
+def photostim_group_map(s):
+    """Map each REAL (power > 0) photostim group to its power and targets.
+
+    Returns a dict keyed by real `target_number`, each value a dict:
         power        - laser power (mW) of the real group
-        sham         - target_number of the paired sham group (power == 0), or
-                       None when the session ran no sham at all
         target_rois  - sorted array of ROI indices targeted by this group
 
-    Pairing uses `markpoints_group_info` columns [condition_idx, unique_group_id,
-    n_targets, dispersion]: conditions sharing a unique_group_id target the same
-    cells, so a power>0 condition and its power==0 sibling are the real/sham pair.
-    A real group with no sham sibling falls back to the session's sham pool rather
-    than being dropped; a session with no sham anywhere gets sham=None, and
-    `influence_grand` then uses a baseline z-score instead (mode='zscore').
+    Target ROIs are collected over every condition sharing the group's
+    `unique_group_id` (`markpoints_group_info` columns [condition_idx,
+    unique_group_id, n_targets, dispersion]), since those conditions address the
+    same cells. Shams are not paired with groups; compare against all sham
+    trials pooled (`sham_target_numbers`).
     `target_number` is assumed to be `condition_idx + offset` where `offset` is
     derived from the data (min unique target_number), not hard-coded.
     """
@@ -35,57 +56,24 @@ def photostim_group_map(s):
     powers = s.markpoints_laser_power         # (n_conds,)
     cond_idx = group_info[:, 0].astype(int)
     unique_group_id = group_info[:, 1].astype(int)
-
-    tn_unique = np.unique(s.target_number)
-    offset = int(round(tn_unique.min())) - int(cond_idx.min())
-
-    def cond_to_tn(ci):
-        return ci + offset
-
-    def tn_to_cond(tn):
-        return int(round(tn)) - offset
+    offset = _tn_offset(s)
 
     mp_cond = s.markpoints_condition_idx      # (n_points,) condition per markpoint
     mp_roi = s.markpoint_assigned_roi         # (n_points,) ROI per markpoint, -1=none
-
-    # shams pooled across the whole session, for real groups that have no sham
-    # sibling of their own. The influence functions already pool every sham into
-    # one reference (they measure the same null), so a shared sham is correct
-    # downstream — a real group must not be dropped just because it lacks a pair.
-    session_shams = [c for c in cond_idx if powers[c] == 0]
-    warned_pooled = False
 
     result = {}
     for ci in cond_idx:
         if powers[ci] <= 0:
             continue
-        uid = unique_group_id[ci]
-        sibling_conds = cond_idx[unique_group_id == uid]
-        sham_conds = [c for c in sibling_conds if powers[c] == 0]
-        if sham_conds:
-            sham_cond = sham_conds[0]
-        elif session_shams:
-            sham_cond = session_shams[0]
-            if not warned_pooled:
-                print(f'[!] {s.exp_id}: one or more real photostim groups have no '
-                      f'sham sibling of their own; using the session sham pool '
-                      f'(condition {sham_cond}) as their reference.')
-                warned_pooled = True
-        else:
-            # no sham anywhere: legitimate for spontaneous + photostim sessions.
-            # influence_grand falls back to a baseline z-score (mode='zscore').
-            sham_cond = None
-
+        sibling_conds = cond_idx[unique_group_id == unique_group_id[ci]]
         target_rois = set()
         for c in sibling_conds:
             pts = np.where(mp_cond == c)[0]
             rois = mp_roi[pts]
             target_rois.update(int(r) for r in rois if r >= 0)
 
-        real_tn = cond_to_tn(ci)
-        result[real_tn] = dict(
+        result[ci + offset] = dict(
             power=float(powers[ci]),
-            sham=cond_to_tn(sham_cond) if sham_cond is not None else None,
             target_rois=np.array(sorted(target_rois), dtype=int),
         )
     return result
@@ -101,7 +89,7 @@ def cyc_trial_group(s):
     `target_number` is taken as index-aligned with `stim_id` (no offset). That
     holds on a session as loaded, and on one where `dropFirstEvents` has trimmed
     both consistently — real photostim groups then show a much larger response in
-    their targeted cells than their sham pair, and a shifted pairing gives the
+    their targeted cells than the pooled sham, and a shifted pairing gives the
     reverse. Note the empirical check behind that claim only exercises the
     as-loaded case; it is `dropFirstEvents`' job to preserve the alignment, and a
     bug there previously broke it silently (real/sham came out swapped). The
@@ -131,23 +119,26 @@ def cyc_trial_group(s):
 
 
 def check_real_sham_ordering(s, base_sl=None, peak_sl=None, verbose=True):
-    """Sanity-check that each real group drives its targets harder than its sham.
+    """Sanity-check that each real group drives its targets harder than the
+    pooled sham.
 
-    A sham fires at 0 mW, so it cannot drive its targeted ROIs. If a sham's mean
-    target-ROI response exceeds its real partner's, the trial<->target_number
-    pairing is off (typically a leading-event/off-by-one bug upstream in
-    `dropFirstEvents`) and every real/sham comparison downstream is inverted.
+    A sham fires at 0 mW, so it cannot drive any ROI. If the pooled sham's mean
+    response in a group's target ROIs exceeds that group's own, the
+    trial<->target_number pairing is off (typically a leading-event/off-by-one
+    bug upstream in `dropFirstEvents`) and every real/sham comparison downstream
+    is inverted.
 
     Returns True when all groups are ordered correctly, False otherwise. Warns on
     each violation when `verbose`.
     """
     gmap = photostim_group_map(s)
     grp = cyc_trial_group(s)
+    shams = sham_target_numbers(s)
     if base_sl is None or peak_sl is None:
         base_sl, peak_sl = cyc_response_windows(s)
 
     def target_resp(rois, tn):
-        si, ti = np.where(grp == tn)
+        si, ti = np.where(np.isin(grp, np.atleast_1d(tn)))
         if not len(si):
             return np.nan
         tr = s.cyc[np.ix_(np.asarray(rois))][:, si, ti, :]
@@ -165,38 +156,40 @@ def check_real_sham_ordering(s, base_sl=None, peak_sl=None, verbose=True):
         rois = info['target_rois']
         if not len(rois):
             continue
-        r, sh = target_resp(rois, real_tn), target_resp(rois, info['sham'])
+        r, sh = target_resp(rois, real_tn), target_resp(rois, shams)
         if np.isnan(r) or np.isnan(sh):
             continue
         if r <= sh:
             ok = False
             if verbose:
-                print(f'[!] {s.exp_id}: group {real_tn:g} sham response ({sh:+.4f}) '
-                      f'exceeds real ({r:+.4f}) in its own targets — real/sham are '
-                      f'likely swapped; check dropFirstEvents / event alignment.')
+                print(f'[!] {s.exp_id}: group {real_tn:g} pooled sham response '
+                      f'({sh:+.4f}) exceeds real ({r:+.4f}) in its own targets — '
+                      f'real/sham are likely swapped; check dropFirstEvents / '
+                      f'event alignment.')
     return ok
 
 
 def describe_photostim_groups(s):
-    """Print the real/sham group pairing, powers, target ROIs, and trial counts."""
+    """Print the pooled sham, then each real group's power, target ROIs, and
+    trial count."""
     if not s.has_photostim:
         print(f'{s.exp_id}: no photostimulation data in this session.')
         return
 
     gmap = photostim_group_map(s)
     grp = cyc_trial_group(s)
+    shams = sham_target_numbers(s)
 
     print(f'=== Photostimulation groups: {s.exp_id} ===')
+    if shams:
+        print(f'  pooled sham (0 mW): target_numbers {shams}  '
+              f'trials={int(np.isin(grp, shams).sum())}')
+    else:
+        print('  no sham (0 mW) condition in this session')
     for real_tn, info in sorted(gmap.items()):
         n_real = int(np.sum(grp == real_tn))
-        sham_tn = info['sham']
-        sham_txt = ('none (no sham in session)' if sham_tn is None
-                    else f'{sham_tn:g}')
-        n_sham = 0 if sham_tn is None else int(np.sum(grp == sham_tn))
         print(f'  group {real_tn:g} (power={info["power"]:.0f} mW)  '
-              f'paired sham={sham_txt}  '
-              f'targets={info["target_rois"].tolist()}  '
-              f'trials: real={n_real} sham={n_sham}')
+              f'targets={info["target_rois"].tolist()}  trials={n_real}')
 
 
 def plot_photostim_group_heatmaps(s, mode='raw', baseline_guard_sec=0.5,
@@ -306,15 +299,18 @@ def group_trial_resp(s, target_tn, grp, base_sl=None, peak_sl=None, resps=None):
         axis, not a recomputation. When None, recomputes from `s.cyc` using
         `base_sl`/`peak_sl` (the explicit-window override path).
 
+    target_tn : a target_number, or a list of them whose trials are pooled
+        (e.g. `sham_target_numbers(s)` for the pooled sham).
     grp : (n_stims, n_trials) target_number per cyc trial slot, from
         `cyc_trial_group`. base_sl, peak_sl : frame slices from
         `cyc_response_windows`.
     """
     n_stims = len(s.unique_stims)
     n_trials = s.cyc.shape[2]
+    target_tns = np.atleast_1d(target_tn)
     resp = np.full((s.n_rois, n_stims, n_trials), np.nan)
     for si in range(n_stims):
-        trial_idx = np.where(grp[si] == target_tn)[0]
+        trial_idx = np.where(np.isin(grp[si], target_tns))[0]
         if len(trial_idx) == 0:
             continue
         if resps is not None:
@@ -489,10 +485,8 @@ def influence_grand(s, baseline_guard_sec=None, post_sec=None,
     # Shams differ only in which targets were addressed at zero power, so they
     # measure the same null; pooling them gives a single per-cell reference and a
     # far better-sampled sigma than any one group's shams could.
-    sham_tns = sorted({info['sham'] for info in gmap.values()})
-    sham_all = np.concatenate(
-        [group_trial_resp(s, tn, grp, base_sl, peak_sl, resps).reshape(s.n_rois, -1)
-         for tn in sham_tns], axis=1)                     # (n_cells, n_sham_trials)
+    sham_all = group_trial_resp(s, sham_target_numbers(s), grp, base_sl, peak_sl,
+                                resps).reshape(s.n_rois, -1)  # (n_cells, n_slots)
     mean_sham = np.nanmean(sham_all, axis=1)              # (n_cells,)
     sigma_sham = np.nanstd(sham_all, axis=1, ddof=1)      # (n_cells,)
     if clip_sham:
@@ -549,9 +543,8 @@ def _influence_by_bins(s, bins, kind, baseline_guard_sec, post_sec, baseline,
         ref_groups = [_pooled_group_resps(s, gmap, grp, base_sl, peak_sl, resps)]
         clip_sham = False
     else:
-        sham_tns = sorted({info['sham'] for info in gmap.values()})
-        ref_groups = [group_trial_resp(s, tn, grp, base_sl, peak_sl, resps)
-                      for tn in sham_tns]                 # each (cells, stims, trials)
+        ref_groups = [group_trial_resp(s, sham_target_numbers(s), grp, base_sl,
+                                       peak_sl, resps)]   # (cells, stims, trials)
 
     # per-bin sham reference: all sham groups pooled, restricted to the bin
     n_bins = len(bins)
@@ -692,8 +685,9 @@ def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
         matching `influence_by_stim`).
 
     For each cell (and, when by='stim', each stimulus condition), resamples the
-    pooled real trials and the pooled sham trials *independently* with
-    replacement (they are separate trial sets, not paired), recomputes
+    pooled real trials and the pooled sham trials — every sham (0 mW) trial of
+    every group, the same reference `influence_grand` uses — *independently*
+    with replacement (they are separate trial sets, not paired), recomputes
     mean(real) / mean(sham) and the ratio, and repeats `n_boot` times. Reports
     the point estimate (from `influence_grand`/`influence_by_stim`, unresampled),
     the bootstrap SEM (SD of the resampled distribution), and the 2.5/97.5
@@ -724,6 +718,10 @@ def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
     if zscore:
         # no sham: resample against every photostim trial pooled (the zscore reference)
         resp_ref = _pooled_group_resps(s, gmap, grp, base_sl, peak_sl, resps)
+    else:
+        # every group resamples against the same pooled sham
+        resp_ref = group_trial_resp(s, sham_target_numbers(s), grp, base_sl,
+                                    peak_sl, resps)
 
     def stat(mr, pool, h):
         mh = np.nanmean(pool[:, h], axis=1)
@@ -734,10 +732,9 @@ def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
             return np.where(np.abs(mh) > 1e-6, (mr - mh) / mh, np.nan)
 
     influence = {}
-    for real_tn, info in gmap.items():
+    for real_tn in gmap:
         resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl, resps)
-        resp_sham = (resp_ref if zscore else
-                     group_trial_resp(s, info['sham'], grp, base_sl, peak_sl, resps))
+        resp_sham = resp_ref
         # (n_cells, n_stims, n_trials) -> pool trials per the 'by' scope
         if by == 'grand':
             real_pool = resp_real.reshape(s.n_rois, -1)   # (n_cells, n_stims*n_trials)
@@ -952,8 +949,9 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
 
     Grid of line plots: one row per real photostim group/ensemble, one column per
     targeted ROI in that group. Each subplot overlays the target's real (power>0)
-    and paired sham (power=0) trial-averaged traces (mean +/- SEM), collapsed
-    across visual stims (as plot_photostim_group_heatmaps does).
+    and pooled sham (every power=0 trial, `sham_target_numbers`) trial-averaged
+    traces (mean +/- SEM), collapsed across visual stims (as
+    plot_photostim_group_heatmaps does).
 
     window : (t0, t1) in seconds from the START of the cyc window (the same
         convention as `baseline`/`peak` and `compute_responses`, NOT relative to
@@ -985,6 +983,7 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
 
     gmap = photostim_group_map(s)
     grp = cyc_trial_group(s)
+    shams = sham_target_numbers(s)
     real_groups = sorted(gmap.keys())
     n_frames = s.cyc.shape[3]
     fp = s.frame_period
@@ -1012,7 +1011,7 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
                              figsize=(3 * n_cols, 2.5 * n_rows))
 
     def mean_sem(roi, target_tn):
-        si, ti = np.where(grp == target_tn)
+        si, ti = np.where(np.isin(grp, np.atleast_1d(target_tn)))
         if trial_range is not None:
             keep = (ti >= t_lo) & (ti < t_hi)
             si, ti = si[keep], ti[keep]
@@ -1030,7 +1029,6 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
     legended = False
     for row, real_tn in enumerate(real_groups):
         target_rois = gmap[real_tn]['target_rois']
-        sham_tn = gmap[real_tn]['sham']
         for col in range(n_cols):
             ax = axes[row, col]
             if col >= len(target_rois):
@@ -1043,8 +1041,8 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
                 ax.axvspan(peak_sl.start * fp, peak_sl.stop * fp,
                            color='gold', alpha=0.2, lw=0)
             traces = [(real_tn, _TARGET_COLOR, 'real')]
-            if sham_tn is not None:
-                traces.append((sham_tn, _NONTARGET_COLOR, 'sham'))
+            if shams:
+                traces.append((shams, _NONTARGET_COLOR, 'sham (pooled)'))
             for tn, color, label in traces:
                 mean, sem = mean_sem(roi, tn)
                 ax.plot(xf, mean[f0:f1], color=color, lw=1,

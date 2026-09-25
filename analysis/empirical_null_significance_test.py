@@ -14,7 +14,8 @@ from scipy.interpolate import interp1d
 import statsmodels.api as sm
 from patsy import dmatrix
 from analysis.photostim import (photostim_group_map, cyc_trial_group,
-                                group_trial_resp, _influence_trial_resps)
+                                group_trial_resp, _influence_trial_resps,
+                                sham_target_numbers)
 
 FDR_THRESH = 0.20
 # Bin count / spline flexibility scale with sample size. The plan's 120 bins and
@@ -31,10 +32,9 @@ resps, base_sl, peak_sl = _influence_trial_resps(dat, None, None, None, None)
 good = np.asarray(dat.is_good_cell, dtype=bool)
 
 # ---- pooled sham reference, exactly as influence_grand builds it ----------------
-sham_tns = sorted({info['sham'] for info in gmap.values()})
 sham_all = np.concatenate(
     [group_trial_resp(dat, tn, grp, base_sl, peak_sl, resps).reshape(dat.n_rois, -1)
-     for tn in sham_tns], axis=1)                       # (n_cells, n_sham_trials)
+     for tn in sham_target_numbers(dat)], axis=1)       # (n_cells, n_sham_trials)
 sham_all = sham_all[:, ~np.all(np.isnan(sham_all), axis=0)]
 mean_sham = np.nanmean(sham_all, axis=1)
 sigma_sham = np.nanstd(sham_all, axis=1, ddof=1)
