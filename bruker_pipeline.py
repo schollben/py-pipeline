@@ -611,11 +611,11 @@ def process_experiment(
         stim_on_sec = vrec_channel_events[vis_ch]['onsets_sec']
         if len(stim_on_sec) > 1:
             diffs = np.diff(stim_on_sec)
-            median_iti = np.median(diffs)
-            if stim_on_sec[0] > 2 * median_iti:
-                print(f'[WARNING] First stim trigger gap ({stim_on_sec[0]:.2f} s) is '
-                      f'>2× median ITI ({median_iti:.2f} s) — dropping erroneous first trigger.')
-                stim_on_sec = stim_on_sec[1:]
+            # median_iti = np.median(diffs)
+            # if stim_on_sec[0] > 2 * median_iti:
+            #     print(f'[WARNING] First stim trigger gap ({stim_on_sec[0]:.2f} s) is '
+            #           f'>2× median ITI ({median_iti:.2f} s) — dropping erroneous first trigger.')
+            #     stim_on_sec = stim_on_sec[1:]
         frame_triggers_sec = result['frame_triggers_sec']
         stim_on_2p_frame = np.array([
             np.argmin(np.abs(s - frame_triggers_sec))
@@ -630,14 +630,14 @@ def process_experiment(
         opto_onsets     = vrec_channel_events[opto_ch]['onsets']
         if len(opto_onsets_sec) > 1:
             diffs = np.diff(opto_onsets_sec)
-            median_iti = np.median(diffs)
-            if opto_onsets_sec[0] > 2 * median_iti:
-                print(f'[WARNING] First photostim trigger gap ({opto_onsets_sec[0]:.2f} s) is '
-                      f'>2× median ITI ({median_iti:.2f} s) — dropping erroneous first photostim trigger.')
-                opto_onsets_sec = opto_onsets_sec[1:]
-                opto_onsets     = opto_onsets[1:]
-                vrec_channel_events[opto_ch]['onsets_sec'] = opto_onsets_sec
-                vrec_channel_events[opto_ch]['onsets']     = opto_onsets
+            # median_iti = np.median(diffs)
+            # if opto_onsets_sec[0] > 2 * median_iti:
+            #     print(f'[WARNING] First photostim trigger gap ({opto_onsets_sec[0]:.2f} s) is '
+            #           f'>2× median ITI ({median_iti:.2f} s) — dropping erroneous first photostim trigger.')
+            #     opto_onsets_sec = opto_onsets_sec[1:]
+            #     opto_onsets     = opto_onsets[1:]
+            #     vrec_channel_events[opto_ch]['onsets_sec'] = opto_onsets_sec
+            #     vrec_channel_events[opto_ch]['onsets']     = opto_onsets
         result['photostim_triggers_sec'] = opto_onsets_sec
 
     # --- Read PsychoPy file whenever stim_file > -1 ---

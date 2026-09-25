@@ -20,11 +20,10 @@ from analysis import (load_session, check_event_alignment, dropFirstEvents,
 from analysis import info
 ################################################################
 
-# session_name = 'TSeries-07132025-1042-003.h5'
-session_name = 'TSeries-11032024-1313-012.h5'
+session_name = 'TSeries-07132025-1042-006.h5'
+# session_name = 'TSeries-11032024-1313-012.h5'
 folderName = '/mnt/bigdata/PROCESSED'
-FNAME = folderName + session_name
-
+FNAME = folderName + '/' + session_name
 
 ################################################################
 
@@ -52,11 +51,12 @@ dat.dist = squareform(pdist(dat.roiLocs, metric='euclidean'))
 plot_avg_rois(dat,vmax_frac=0.6); 
 
 # check for a spurious first TTL pair (opto artifact) before building cyc.
-# The spurious event can also fire the SLM photostim accidentally, consuming the
-# first psychopy target row, so apply_psychopy_offset must run before dropFirstEvents.
+# An artifact also implies the psychopy target row offset, which must be
+# removed before dropFirstEvents.
 if check_event_alignment(dat):
-    apply_psychopy_offset(dat)
+    # apply_psychopy_offset(dat)
     dropFirstEvents(dat)
+
 # photostimulation check
 if dat.has_photostim==False:
     print("NO photostimulation data")

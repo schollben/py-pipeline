@@ -5,9 +5,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from bruker_pipeline import process_experiment
 
 # Set parameters for the experiment to process
-DATE            = '07132025'    # acquisition date, format MMDDYYYY
+DATE            = '07212026'    # acquisition date, format MMDDYYYY
 FILE_NUM        = 3            # TSeries number (e.g. 3 → matches folder ending in -003)
-STIM_FILE       = 2            # PsychoPy file, Set to -1 if there is no stimulus file.
+STIM_FILE       = 3            # PsychoPy file, SET TO -1 if there is no stimulus file.
 USE_INFERENCE   = True         # True  → use inference.h5
 DUR_RESP        = 2             # Response window duration in seconds to build the trial-averaged response matrix (cyc)
 PRE_RESP        = 0.5             # Pre-stimulus window duration in seconds prepended to each cyc trial (0 = no pre)
