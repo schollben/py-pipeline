@@ -1,6 +1,7 @@
 # functions to pass along experiment information and hardcoded values
 # getZoom - measured on scope to be recalculated
 # getOffsetFrames - returns the number of frames to offset the stimulus timing for a given session 
+# getPsychopyOffset - True if the session needs apply_psychopy_offset (decided per session from data)
 # getWindow - returns the baseline and peak windows for a given session
 
 def getOffsetFrames(session_name):
@@ -21,6 +22,18 @@ def getOffsetFrames(session_name):
         offset_frames[session_name] = 0
 
     return offset_frames.get(session_name, 0)
+
+
+def getPsychopyOffset(session_name):
+    # True -> drop the first psychopy target row (apply_psychopy_offset).
+    # Decide per session by looking at the data (check_real_sham_ordering, heatmaps).
+    # Legacy H5 files already have the row dropped; no entry needed.
+
+    psychopy_offset = {}
+
+    # psychopy_offset['TSeries-MMDDYYYY-HHMM-NNN.h5'] = True
+
+    return psychopy_offset.get(session_name, False)
 
 
 def removeROIs(session_name):
