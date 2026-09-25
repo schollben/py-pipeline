@@ -149,8 +149,7 @@ Typical order of operations:
   Preprocessing saves `target_number`/`target_trial` unshifted. When
   `check_event_alignment` detects the opto artifact, the driver calls
   `apply_psychopy_offset` (drops the first target row, `[1,2,3,…] → [2,3,4,…]`)
-  before `dropFirstEvents`. `info.getPsychopyOffset` forces the offset on sessions
-  where no artifact is detected. Check the result with `check_real_sham_ordering`.
+  before `dropFirstEvents`. Check the result with `check_real_sham_ordering`.
   Legacy H5 files already have the row dropped.
 - Sessions without a sham (0 mW) group: every influence function falls back to
   `mode='zscore'` (each group vs. all photostim trials pooled). This needs at

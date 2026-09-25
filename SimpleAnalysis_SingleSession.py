@@ -52,12 +52,10 @@ dat.dist = squareform(pdist(dat.roiLocs, metric='euclidean'))
 plot_avg_rois(dat,vmax_frac=0.6); 
 
 # check for a spurious first TTL pair (opto artifact) before building cyc.
-# An artifact also implies the psychopy target row offset; info.getPsychopyOffset
-# forces the offset on sessions without one. The offset must run before dropFirstEvents.
-artifact = check_event_alignment(dat)
-if artifact or info.getPsychopyOffset(session_name):
+# An artifact also implies the psychopy target row offset, which must be
+# removed before dropFirstEvents.
+if check_event_alignment(dat):
     apply_psychopy_offset(dat)
-if artifact:
     dropFirstEvents(dat)
 # photostimulation check
 if dat.has_photostim==False:
@@ -103,7 +101,7 @@ for n in remove_rois:
 # %% photostimulation group dF/F activity
 
 describe_photostim_groups(dat)
-check_real_sham_ordering(dat)   # False -> real/sham swapped: revisit getPsychopyOffset
+check_real_sham_ordering(dat)   # False -> real/sham swapped: check event alignment
 plot_photostim_target_traces(dat, baseline=baseline, peak=peak); 
 
 

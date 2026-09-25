@@ -228,8 +228,7 @@ def apply_psychopy_offset(s):
 
     Analysis-side replacement for the pipeline's removed `opto_offset_trigger`
     (a known 1-row offset between the photostim trigger stream and the PsychoPy
-    file). Whether a session needs it is decided per session from real data —
-    see `info.getPsychopyOffset` — not detected automatically.
+    file). Applied when `check_event_alignment` detects the opto artifact.
 
     Must run before `dropFirstEvents`: after this call a new file is in the same
     state as a legacy H5 (`len(tn) == len(stim_id) - 1`), which `dropFirstEvents`
