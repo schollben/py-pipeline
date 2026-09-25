@@ -129,8 +129,10 @@ dat = load_session('/path/to/PROCESSED/TSeries-07132025-1042-003.h5')
 Typical order of operations:
 
 1. `load_session` → a `Session` object (`dat`); `plot_avg_rois` to check the ROI mask.
-2. `check_event_alignment`; if it flags the artifact, `apply_psychopy_offset` then
-   `dropFirstEvents` — remove the target row offset and the spurious first TTL pair.
+2. `apply_psychopy_offset` (drops the PsychoPy row used up by the scan-start MarkPoints
+   fire), `apply_markpoints_labels` (checks the labels against Bruker's MarkPoints
+   sequence; replaces them only where they differ), then `check_event_alignment`; if it
+   flags the artifact, `dropFirstEvents` removes the spurious first TTL pair.
 3. `rebuild_cyc(dat, preStim=, postStim=, offsetFrames=)` — rebuild the trial matrix from raw
    dF/F with wider windows. `offsetFrames` corrects residual event-timing lead/lag.
 4. `plot_stim_traces` to read baseline/peak windows off the plot, then
@@ -155,6 +157,12 @@ Typical order of operations:
   `apply_psychopy_offset` (drops the first target row, `[1,2,3,…] → [2,3,4,…]`)
   before `dropFirstEvents`. Check the result with `check_real_sham_ordering`.
   Legacy H5 files already have the row dropped.
+- Nov-2024 (11032024) sessions: the rig used the OLD vrec wiring (visual on Input 0,
+  photostim on Input 1). The pipeline now detects the wiring by pulse width; H5 files
+  processed before that used a photostim line as the visual trigger and must be
+  reprocessed. Their PsychoPy `target_number` is a block counter that Bruker never
+  received; `apply_markpoints_labels` replaces it with the element Bruker actually fired
+  on each TTL.
 - Sessions without a sham (0 mW) group: every influence function falls back to
   `mode='zscore'` (each group vs. all photostim trials pooled). This needs at
   least two groups to be meaningful.
