@@ -360,6 +360,37 @@ def _influence_trial_resps(s, baseline_guard_sec, post_sec, baseline, peak):
     return s.resps, None, None
 
 
+def _resolve_influence_mode(s, mode):
+    """Fall back to mode='zscore' when the session has no sham (0 mW) condition.
+
+    With no null condition to difference against, 'dprime'/'diff' would be
+    all-NaN, so each cell is scored against every photostim trial pooled instead.
+    Also warns when there is only one real group: the pooled reference is then
+    that group's own trials, so the z-score is ~0 and not interpretable.
+    """
+    if not s.has_sham and mode != 'zscore':
+        # spontaneous + photostim sessions are typically run without a sham, so
+        # there is no null condition to difference against. Fall back to the
+        # sham-free z-score rather than returning all-NaN.
+        print(f'[!] {s.exp_id}: no sham (0 mW) condition in this session; '
+              f"mode='{mode}' has no reference to compare against. Using "
+              f"mode='zscore' (each cell against its own across-trial null).")
+        mode = 'zscore'
+    if mode == 'zscore' and len(photostim_group_map(s)) < 2:
+        print(f"[!] {s.exp_id}: mode='zscore' with a single photostim group — the "
+              f'reference is that group\'s own trials, so influence is ~0 and '
+              f'not interpretable.')
+    return mode
+
+
+def _pooled_group_resps(s, gmap, grp, base_sl, peak_sl, resps):
+    """Every photostim group's trial responses concatenated along the trial axis:
+    (n_cells, n_stims, n_trials_total). The no-sham (zscore) reference."""
+    return np.concatenate(
+        [group_trial_resp(s, tn, grp, base_sl, peak_sl, resps) for tn in sorted(gmap)],
+        axis=2)
+
+
 def influence_grand(s, baseline_guard_sec=None, post_sec=None,
                     baseline=None, peak=None, mode='dprime', good_only=True,
                     clip_sham=True):
@@ -423,14 +454,7 @@ def influence_grand(s, baseline_guard_sec=None, post_sec=None,
         raise ValueError(
             f'{s.exp_id}: good_only=True but the session has no is_good_cell '
             f'flag; run compute_snr(...) first or pass good_only=False.')
-    if not s.has_sham and mode != 'zscore':
-        # spontaneous + photostim sessions are typically run without a sham, so
-        # there is no null condition to difference against. Fall back to the
-        # sham-free z-score rather than returning all-NaN.
-        print(f'[!] {s.exp_id}: no sham (0 mW) condition in this session; '
-              f"mode='{mode}' has no reference to compare against. Using "
-              f"mode='zscore' (each cell against its own across-trial null).")
-        mode = 'zscore'
+    mode = _resolve_influence_mode(s, mode)
     gmap = photostim_group_map(s)
     grp = cyc_trial_group(s)
     resps, base_sl, peak_sl = _influence_trial_resps(
@@ -499,6 +523,10 @@ def _influence_by_bins(s, bins, kind, baseline_guard_sec, post_sec, baseline,
                        peak, mode, good_only, clip_sham):
     """Influence per stimulus bin, against a sham reference matched to each bin.
 
+    With mode='zscore' (no sham in the session) the reference for each bin is
+    every photostim trial of every group pooled within that bin, and the
+    formula is the dprime one: (mean_real - mean_ref) / sigma_ref.
+
     `bins` is a list of (label, stim_mask, sham_mask) triples. `stim_mask`
     selects the columns of the (n_cells, n_stims, n_trials) response arrays that
     make up the bin's real trials; `sham_mask` selects the columns forming its
@@ -515,9 +543,15 @@ def _influence_by_bins(s, bins, kind, baseline_guard_sec, post_sec, baseline,
     resps, base_sl, peak_sl = _influence_trial_resps(
         s, baseline_guard_sec, post_sec, baseline, peak)
 
-    sham_tns = sorted({info['sham'] for info in gmap.values()})
-    sham_by_group = [group_trial_resp(s, tn, grp, base_sl, peak_sl, resps)
-                     for tn in sham_tns]                  # each (cells, stims, trials)
+    if mode == 'zscore':
+        # no sham: the reference is every photostim trial of every group, pooled
+        # and restricted to the bin, so the visual drive still cancels.
+        ref_groups = [_pooled_group_resps(s, gmap, grp, base_sl, peak_sl, resps)]
+        clip_sham = False
+    else:
+        sham_tns = sorted({info['sham'] for info in gmap.values()})
+        ref_groups = [group_trial_resp(s, tn, grp, base_sl, peak_sl, resps)
+                      for tn in sham_tns]                 # each (cells, stims, trials)
 
     # per-bin sham reference: all sham groups pooled, restricted to the bin
     n_bins = len(bins)
@@ -525,7 +559,7 @@ def _influence_by_bins(s, bins, kind, baseline_guard_sec, post_sec, baseline,
     sigma_sham = np.full((s.n_rois, n_bins), np.nan)
     for bi, (_, _, sham_mask) in enumerate(bins):
         pooled = np.concatenate(
-            [r[:, sham_mask, :].reshape(s.n_rois, -1) for r in sham_by_group], axis=1)
+            [r[:, sham_mask, :].reshape(s.n_rois, -1) for r in ref_groups], axis=1)
         mean_sham[:, bi] = np.nanmean(pooled, axis=1)
         sigma_sham[:, bi] = np.nanstd(pooled, axis=1, ddof=1)
     if clip_sham:
@@ -561,12 +595,13 @@ def _influence_by_bins(s, bins, kind, baseline_guard_sec, post_sec, baseline,
 def _check_influence_args(s, mode, good_only):
     # both callers bin trials by stimulus condition, so they need stim_table
     require_visual(s, 'influence_by_stim / influence_by_contrast')
-    if mode not in ('dprime', 'diff'):
-        raise ValueError("mode must be 'dprime' or 'diff'")
+    if mode not in ('dprime', 'diff', 'zscore'):
+        raise ValueError("mode must be 'dprime', 'diff' or 'zscore'")
     if good_only and s.is_good_cell is None:
         raise ValueError(
             f'{s.exp_id}: good_only=True but the session has no is_good_cell '
             f'flag; run compute_snr(...) first or pass good_only=False.')
+    return _resolve_influence_mode(s, mode)
 
 
 def influence_by_stim(s, baseline_guard_sec=None, post_sec=None,
@@ -597,14 +632,15 @@ def influence_by_stim(s, baseline_guard_sec=None, post_sec=None,
     `mode='diff'`, which has no denominator.
 
     Window handling, `mode`, `good_only` and `clip_sham` all match
-    `influence_grand`.
+    `influence_grand`; with no sham the mode falls back to 'zscore' against all
+    photostim trials pooled per stimulus.
 
     Sets s.influence = {real_tn: {'influence': (n_cells, n_stims),
     'grand': (n_cells,), 'labels': stim ids, 'kind': 'stim', 'mode': mode}} and
     returns the same dict. `grand` is the mean across stims, for
     `plot_influence_maps`.
     """
-    _check_influence_args(s, mode, good_only)
+    mode = _check_influence_args(s, mode, good_only)
     # every contrast-0 stimulus is the same blank regardless of its nominal
     # direction, so both its real and its sham trials pool across all contrast-0
     # stimuli: those columns are identical to each other, and to the contrast-0
@@ -639,7 +675,7 @@ def influence_by_contrast(s, baseline_guard_sec=None, post_sec=None,
     'grand': (n_cells,), 'labels': contrasts, 'kind': 'contrast',
     'mode': mode}} and returns the same dict.
     """
-    _check_influence_args(s, mode, good_only)
+    mode = _check_influence_args(s, mode, good_only)
     stim_contrast = s.stim_table[:, 1]
     bins = [(c, stim_contrast == c, stim_contrast == c) for c in s.contrasts]
     return _influence_by_bins(s, bins, 'contrast', baseline_guard_sec, post_sec,
@@ -663,6 +699,10 @@ def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
     the bootstrap SEM (SD of the resampled distribution), and the 2.5/97.5
     percentile CI.
 
+    With no sham in the session, the reference pool is every photostim trial of
+    every group (the mode='zscore' reference) and the resampled statistic is the
+    z-score (mean_real - mean_ref) / std_ref.
+
     Sets s.influence = {real_tn: {
         'grand' or 'influence': point estimate (as in influence_grand/by_stim),
         'sem': same shape, bootstrap SD,
@@ -672,12 +712,7 @@ def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
     """
     if by not in ('grand', 'stim'):
         raise ValueError("by must be 'grand' or 'stim'")
-    if not s.has_sham:
-        raise ValueError(
-            f'{s.exp_id}: influence_bootstrap resamples real against sham trials, '
-            f'but this session has no sham (0 mW) condition. Use '
-            f"influence_grand(mode='zscore') for a sham-free estimate.")
-
+    zscore = not s.has_sham
     point = (influence_grand if by == 'grand' else influence_by_stim)(
         s, baseline_guard_sec, post_sec, baseline, peak)
 
@@ -686,11 +721,23 @@ def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
     resps, base_sl, peak_sl = _influence_trial_resps(
         s, baseline_guard_sec, post_sec, baseline, peak)
     rng = np.random.default_rng(seed)
+    if zscore:
+        # no sham: resample against every photostim trial pooled (the zscore reference)
+        resp_ref = _pooled_group_resps(s, gmap, grp, base_sl, peak_sl, resps)
+
+    def stat(mr, pool, h):
+        mh = np.nanmean(pool[:, h], axis=1)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            if zscore:
+                sh = np.nanstd(pool[:, h], axis=1, ddof=1)
+                return np.where(sh > 0, (mr - mh) / sh, np.nan)
+            return np.where(np.abs(mh) > 1e-6, (mr - mh) / mh, np.nan)
 
     influence = {}
     for real_tn, info in gmap.items():
         resp_real = group_trial_resp(s, real_tn, grp, base_sl, peak_sl, resps)
-        resp_sham = group_trial_resp(s, info['sham'], grp, base_sl, peak_sl, resps)
+        resp_sham = (resp_ref if zscore else
+                     group_trial_resp(s, info['sham'], grp, base_sl, peak_sl, resps))
         # (n_cells, n_stims, n_trials) -> pool trials per the 'by' scope
         if by == 'grand':
             real_pool = resp_real.reshape(s.n_rois, -1)   # (n_cells, n_stims*n_trials)
@@ -699,10 +746,7 @@ def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
             for b in range(n_boot):
                 r = rng.choice(real_pool.shape[1], real_pool.shape[1], replace=True)
                 h = rng.choice(sham_pool.shape[1], sham_pool.shape[1], replace=True)
-                mr = np.nanmean(real_pool[:, r], axis=1)
-                mh = np.nanmean(sham_pool[:, h], axis=1)
-                with np.errstate(invalid='ignore', divide='ignore'):
-                    boot[:, b] = np.where(np.abs(mh) > 1e-6, (mr - mh) / mh, np.nan)
+                boot[:, b] = stat(np.nanmean(real_pool[:, r], axis=1), sham_pool, h)
             influence[real_tn] = dict(
                 grand=point[real_tn]['grand'],
                 sem=np.nanstd(boot, axis=1),
@@ -722,10 +766,7 @@ def influence_bootstrap(s, by='grand', n_boot=1000, seed=None,
                 for b in range(n_boot):
                     r = rng.choice(real_pool.shape[1], real_pool.shape[1], replace=True)
                     h = rng.choice(sham_pool.shape[1], sham_pool.shape[1], replace=True)
-                    mr = np.nanmean(real_pool[:, r], axis=1)
-                    mh = np.nanmean(sham_pool[:, h], axis=1)
-                    with np.errstate(invalid='ignore', divide='ignore'):
-                        boot[:, b] = np.where(np.abs(mh) > 1e-6, (mr - mh) / mh, np.nan)
+                    boot[:, b] = stat(np.nanmean(real_pool[:, r], axis=1), sham_pool, h)
                 sem[:, si] = np.nanstd(boot, axis=1)
                 ci_lo[:, si] = np.nanpercentile(boot, 2.5, axis=1)
                 ci_hi[:, si] = np.nanpercentile(boot, 97.5, axis=1)
