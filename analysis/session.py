@@ -10,7 +10,9 @@ _ARRAYS = ['avg_image', 'mask2d', 'dff', 'unique_stims', 'stim_id',
            'roi_photostim_point', 'markpoint_assigned_roi', 'opto_unique_ids']
 
 _BRUKER_ACQ_ARRAYS = ['markpoints_group_info', 'markpoints_laser_power',
-                      'markpoints_condition_idx']
+                      'markpoints_condition_idx', 'markpoints_repetitions',
+                      'markpoints_trigger_frequency', 'markpoints_trigger_selection',
+                      'markpoints_trigger_count']
 
 @dataclass
 class Session:
@@ -47,6 +49,13 @@ class Session:
     markpoints_group_info: np.ndarray = None
     markpoints_laser_power: np.ndarray = None
     markpoints_condition_idx: np.ndarray = None
+    # MarkPoints trigger settings (one entry per condition = protocol element)
+    markpoints_repetitions: np.ndarray = None
+    markpoints_trigger_frequency: np.ndarray = None   # str
+    markpoints_trigger_selection: np.ndarray = None   # str
+    markpoints_trigger_count: np.ndarray = None
+    markpoints_iterations: int = None
+    markpoints_trigger_override: str = None           # 'PFI0' = fires with scan start
     # microscope optics (from Bruker_Acq)
     optical_zoom: float = None
     objective_mag: float = None
@@ -152,6 +161,15 @@ def load_session(path):
             if d is not None and d.size == 0:
                 d = None
             kw[k] = d
+        for k in ('markpoints_trigger_frequency', 'markpoints_trigger_selection'):
+            if kw[k] is not None:
+                kw[k] = np.char.decode(kw[k])
+        acq = f['Bruker_Acq']
+        if 'markpoints_iterations' in acq and acq['markpoints_iterations'].size:
+            kw['markpoints_iterations'] = int(acq['markpoints_iterations'][()])
+        if 'markpoints_trigger_override' in acq and acq['markpoints_trigger_override'].size:
+            kw['markpoints_trigger_override'] = (
+                acq['markpoints_trigger_override'][()].decode())
         # microscope optics
         kw['optical_zoom'] = (float(f['Bruker_Acq']['optical_zoom'][()])
                               if 'optical_zoom' in f['Bruker_Acq'] else None)
@@ -228,10 +246,12 @@ def apply_psychopy_offset(s):
 
     Analysis-side replacement for the pipeline's removed `opto_offset_trigger`
     (a known 1-row offset between the photostim trigger stream and the PsychoPy
-    file). Applied when `check_event_alignment` detects a spurious first event:
-    that event can also trigger the SLM photostim accidentally, consuming the
-    first PsychoPy target row, so every later photostim trial is labelled one
-    row early unless that row is dropped.
+    file). Every photostim TSeries attaches its MarkPoints series with
+    triggerModeOverride="PFI0", so element 1 fires with the scan start, before
+    any TTL. That uses up the first PsychoPy target row: afterwards
+    `target_number[k]` is the label of photostim TTL k. Run it on every session
+    (see `apply_markpoints_labels`, which checks the result against Bruker's
+    MarkPoints sequence).
 
     Must run before `dropFirstEvents`: after this call a new file is in the same
     state as a legacy H5 (`len(tn) == len(stim_id) - 1`), which `dropFirstEvents`
@@ -261,6 +281,81 @@ def apply_psychopy_offset(s):
           f'{head} -> {s.target_number[:5]}')
 
 
+def _markpoints_ttl_conditions(s, n_ttl):
+    """Condition index fired by photostim TTLs 0..n_ttl-1, from the MarkPoints protocol.
+
+    Prairie View runs the series in order: each element waits for its trigger
+    (one TTL with TriggerFrequency='FirstRepetition', one per repetition with
+    'EveryRepetition'), fires, then moves on; the list repeats `Iterations`
+    times. With triggerModeOverride='PFI0' the first element fires at scan
+    start, so TTL k fires slot k+1. Returns None (after printing why) when the
+    protocol can't be mapped to TTLs this way.
+    """
+    slots = []
+    for e, (freq, sel, cnt, reps) in enumerate(zip(
+            s.markpoints_trigger_frequency, s.markpoints_trigger_selection,
+            s.markpoints_trigger_count, s.markpoints_repetitions)):
+        if (sel == 'None' or int(cnt) != 1
+                or freq not in ('FirstRepetition', 'EveryRepetition')):
+            print(f'{s.exp_id}: MarkPoints element {e} has trigger {sel}/{freq}/'
+                  f'count {cnt}; cannot map TTLs to elements — keeping PsychoPy labels.')
+            return None
+        slots += [e] * (int(reps) if freq == 'EveryRepetition' else 1)
+    slots = np.tile(slots, s.markpoints_iterations or 0)
+    skip = 1 if s.markpoints_trigger_override == 'PFI0' else 0
+    if skip + n_ttl > len(slots):
+        print(f'{s.exp_id}: MarkPoints series has {len(slots) - skip} trigger slots for '
+              f'{n_ttl} TTLs; later TTLs fired nothing — keeping PsychoPy labels, '
+              f'check this session by hand.')
+        return None
+    return np.asarray(slots[skip:skip + n_ttl])
+
+
+def apply_markpoints_labels(s):
+    """Check `target_number` against Bruker's MarkPoints sequence; use Bruker's if they differ.
+
+    PsychoPy logs its own group counter; Bruker never receives it. Bruker fires
+    its MarkPoints elements in protocol order, one per trigger. Where the two
+    agree (the 2025 sessions) this prints one line and changes nothing. Where
+    they differ (Nov-2024 sessions log a block counter, [1]*32 + [2]*32 + ...,
+    while Bruker cycled 1,2,3 per TTL) the labels are replaced by Bruker's.
+    The array length is unchanged, so later steps behave as before.
+
+    Run after `apply_psychopy_offset` (target_number then holds one label per
+    photostim TTL) and before `dropFirstEvents`. Needs H5 files written by a
+    pipeline that saves the MarkPoints trigger settings; older files are left
+    unchanged. Mutates `s` in place.
+    """
+    if not s.has_photostim:
+        print(f'{s.exp_id}: no photostim data — MarkPoints labels not applicable.')
+        return
+    if s.markpoints_trigger_frequency is None or s.markpoints_iterations is None:
+        print(f'{s.exp_id}: no MarkPoints trigger settings in this H5 (reprocess to '
+              f'add them) — keeping PsychoPy labels.')
+        return
+    if not s._psychopy_offset_applied:
+        raise ValueError(f'{s.exp_id}: run apply_psychopy_offset before '
+                         f'apply_markpoints_labels.')
+    if s._events_dropped:
+        raise ValueError(f'{s.exp_id}: apply_markpoints_labels must run before '
+                         f'dropFirstEvents.')
+    from .photostim import _tn_offset
+    tn = s.target_number
+    cond = _markpoints_ttl_conditions(s, len(tn))
+    if cond is None:
+        return
+    bruker = (cond + _tn_offset(s)).astype(tn.dtype)
+    diff = bruker != tn
+    if not diff.any():
+        print(f"{s.exp_id}: photostim labels match Bruker's MarkPoints sequence "
+              f'({len(tn)} TTLs).')
+        return
+    print(f"{s.exp_id}: PsychoPy target_number differs from Bruker's MarkPoints "
+          f'sequence on {diff.sum()}/{len(tn)} TTLs (first at TTL {np.argmax(diff)}); '
+          f"using Bruker's.\n   PsychoPy {tn[:9]}\n   Bruker   {bruker[:9]}")
+    s.target_number = bruker
+
+
 def check_event_alignment(s, n_show=5):
     """Diagnose whether the first visual/photostim TTL pair looks spurious.
 
@@ -281,9 +376,10 @@ def check_event_alignment(s, n_show=5):
     tested against the session's OWN distribution rather than a fixed value. A real
     photostim trial has a characteristic positive lag (3-4 frames on the July-2025
     rig); the spurious event fires in lockstep, so its lag sits below every other
-    trial's. A fixed `lag[0] == 0` test would be wrong: on the Nov-2024 sessions the
-    lag is 0 on EVERY trial (that rig records the photostim at the visual frame), and
-    nothing is spurious there.
+    trial's. A fixed `lag[0] == 0` test would be wrong: H5 files of the Nov-2024
+    sessions processed before the pipeline detected their OLD vrec wiring read a
+    photostim line as visual, so their lag is 0 on EVERY trial and nothing is
+    spurious there (reprocess them).
 
     Prints, from the 2P frame-index arrays (`stim_on_2p_frame`,
     `photostim_2p_frame` — not the raw vrec/seconds triggers):

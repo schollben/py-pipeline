@@ -10,7 +10,7 @@ from analysis.photostim import influence_by_contrast, photostim_group_map
 sns.set_theme(context='notebook', style='white')
 sns.set_theme(style='ticks')
 from analysis import (load_session, check_event_alignment, dropFirstEvents,
-                      apply_psychopy_offset, check_real_sham_ordering,
+                      apply_psychopy_offset, apply_markpoints_labels, check_real_sham_ordering,
                       rebuild_cyc, compute_responses, compute_snr,plot_avg_rois,
                       plot_stim_traces, plot_tuning_curves, compute_selectivity,
                       plot_preference_maps, describe_photostim_groups,
@@ -50,12 +50,14 @@ dat.dist = squareform(pdist(dat.roiLocs, metric='euclidean'))
 # show average image with ROI mask
 plot_avg_rois(dat,vmax_frac=0.6); 
 
-# # check for a spurious first TTL pair (opto artifact) before building cyc.
-# # An artifact also implies the psychopy target row offset, which must be
-# # removed before dropFirstEvents.
-# apply_psychopy_offset(dat)
-# if check_event_alignment(dat):
-#     dropFirstEvents(dat)
+# photostim labels: drop the psychopy row used up by the scan-start MarkPoints
+# fire, then check the labels against Bruker's MarkPoints sequence (replaced
+# only where they differ). Then check for a spurious first TTL pair (opto
+# artifact) before building cyc.
+apply_psychopy_offset(dat)
+apply_markpoints_labels(dat)
+if check_event_alignment(dat):
+    dropFirstEvents(dat)
 
 # photostimulation check
 if dat.has_photostim==False:
