@@ -64,6 +64,7 @@ class Session:
     influence: dict = None
     _stim_table: np.ndarray = field(default=None, repr=False)
     _events_dropped: bool = field(default=False, repr=False)
+    _psychopy_offset_applied: bool = field(default=False, repr=False)
 
     @property
     def directions(self):
@@ -222,12 +223,42 @@ def cyc_onset(s):
     return s.cyc.shape[3] - int(round(s.dur_resp / s.frame_period)) - 1
 
 
-# TODO: migrate the photostim trigger offset "fix" here. The pipeline used to drop
-# the first PsychoPy row from target_number/target_trial (`opto_offset_trigger`,
-# a known 1-row offset between the photostim trigger stream and the PsychoPy
-# file). That was removed from bruker_pipeline so new H5 files are unshifted;
-# the correction must be rebuilt as an analysis-side step alongside
-# check_event_alignment / dropFirstEvents.
+def apply_psychopy_offset(s):
+    """Drop the first PsychoPy target row: `target_number` [1,2,3,4,...] -> [2,3,4,...].
+
+    Analysis-side replacement for the pipeline's removed `opto_offset_trigger`
+    (a known 1-row offset between the photostim trigger stream and the PsychoPy
+    file). Whether a session needs it is decided per session from real data —
+    see `info.getPsychopyOffset` — not detected automatically.
+
+    Must run before `dropFirstEvents`: after this call a new file is in the same
+    state as a legacy H5 (`len(tn) == len(stim_id) - 1`), which `dropFirstEvents`
+    already handles. On a legacy file the row is already gone, so this is a no-op.
+
+    Mutates `s` in place. Raises if already applied or called after dropFirstEvents.
+    """
+    if s.target_number is None:
+        print(f'{s.exp_id}: no photostim data — psychopy offset not applicable.')
+        return
+    if s._psychopy_offset_applied:
+        raise ValueError(f'{s.exp_id}: apply_psychopy_offset already applied.')
+    if s._events_dropped:
+        raise ValueError(f'{s.exp_id}: apply_psychopy_offset must run before '
+                         f'dropFirstEvents.')
+    if len(s.target_number) == len(s.stim_id) - 1:
+        print(f'{s.exp_id}: legacy H5 — psychopy offset already applied upstream; '
+              f'nothing to do.')
+        s._psychopy_offset_applied = True
+        return
+    head = s.target_number[:5]
+    s.target_number = s.target_number[1:]
+    if s.target_trial is not None:
+        s.target_trial = s.target_trial[1:]
+    s._psychopy_offset_applied = True
+    print(f'{s.exp_id}: applied psychopy offset; target_number '
+          f'{head} -> {s.target_number[:5]}')
+
+
 def check_event_alignment(s, n_show=5):
     """Diagnose whether the first visual/photostim TTL pair looks spurious.
 
@@ -334,7 +365,8 @@ def dropFirstEvents(s):
     slots — it never indexes `photostim_2p_frame`. Two cases:
 
       - LEGACY H5 files: the pipeline's (since removed) `opto_offset_trigger`
-        psychopy row-drop already removed `target_number[0]`, so the array
+        psychopy row-drop already removed `target_number[0]` (new files reach
+        the same state via `apply_psychopy_offset`), so the array
         arrives one short (`len(tn) == len(stim_id) - 1`). That row-drop aligned it
         to the UNTRIMMED presentations (`tn[i]` describes raw presentation `i`,
         verified on raw dff: real groups drive their targets 4-10x harder than sham
