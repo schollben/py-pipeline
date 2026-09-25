@@ -178,6 +178,13 @@ result = {
         'markpoints_condition_idx':      np.ndarray,  # (n_points,) group index
         'markpoints_laser_power':        np.ndarray,  # (n_groups,) mW
         'markpoints_spiral_diameter_px': np.ndarray,  # (n_groups,) pixels
+        # MarkPoints trigger settings, one entry per group (= protocol element, firing order)
+        'markpoints_iterations':         int,         # series repeats
+        'markpoints_repetitions':        np.ndarray,  # (n_groups,) int
+        'markpoints_trigger_frequency':  np.ndarray,  # (n_groups,) bytes, e.g. b'FirstRepetition'
+        'markpoints_trigger_selection':  np.ndarray,  # (n_groups,) bytes, e.g. b'TrigIn'
+        'markpoints_trigger_count':      np.ndarray,  # (n_groups,) int
+        'markpoints_trigger_override':   np.ndarray,  # 0-d bytes; b'PFI0' = element 1 fires at scan start
     },
 
     # ── Processing parameters ─────────────────────────────────────────────

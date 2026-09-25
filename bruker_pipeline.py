@@ -347,7 +347,10 @@ def process_experiment(
         result[key] = None
     for key in ('markpoints_xy_norm', 'markpoints_xy_pix',
                 'markpoints_condition_idx', 'markpoints_laser_power',
-                'markpoints_spiral_diameter_px', 'markpoints_group_info'):
+                'markpoints_spiral_diameter_px', 'markpoints_group_info',
+                'markpoints_iterations', 'markpoints_repetitions',
+                'markpoints_trigger_frequency', 'markpoints_trigger_selection',
+                'markpoints_trigger_count', 'markpoints_trigger_override'):
         result['Bruker_Acq'][key] = None
 
     if mp_data is not None:
@@ -417,6 +420,22 @@ def process_experiment(
             ])) if _n > 1 else 0.0
             _group_info[_ci] = [_ci, _uid_map[_ci], _n, _disp]
         result['Bruker_Acq']['markpoints_group_info'] = _group_info
+
+        # ── MarkPoints trigger settings (metadata; one entry per condition =
+        # protocol element, in firing order). The analysis rebuilds which element
+        # each photostim TTL fired from these. Strings are stored as bytes: h5py
+        # can't write numpy unicode arrays, and a plain str would become an attr.
+        _conds = mp_data['conditions']
+        _acq   = result['Bruker_Acq']
+        _acq['markpoints_iterations']        = int(mp_data['iterations'])
+        _acq['markpoints_repetitions']       = np.array([c['repetitions'] for c in _conds])
+        _acq['markpoints_trigger_count']     = np.array([c['trigger_count'] for c in _conds])
+        _acq['markpoints_trigger_frequency'] = np.array(
+            [c['trigger_frequency'] for c in _conds], dtype='S')
+        _acq['markpoints_trigger_selection'] = np.array(
+            [c['trigger_selection'] for c in _conds], dtype='S')
+        _acq['markpoints_trigger_override']  = np.array(
+            xml_params['markpoints_trigger_override'], dtype='S')
 
         if _next_uid < _n_conds:
             for _uid in range(_next_uid):

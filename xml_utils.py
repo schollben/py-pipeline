@@ -29,7 +29,9 @@ def parse_tseries_xml(xml_path):
     dict with keys:
         acquisition_date, frame_period, optical_zoom, microns_per_pixel,
         pixels_per_line, lines_per_frame, objective_lens, objective_mag,
-        objective_na, laser_power, pmt_gain, bit_depth
+        objective_na, laser_power, pmt_gain, bit_depth,
+        markpoints_trigger_override — triggerModeOverride of the first <MarkPoints>
+            attached to the sequence ('PFI0' = fires with the scan start; '' if none)
     """
     tree = ET.parse(xml_path)
     root = tree.getroot()
@@ -47,7 +49,12 @@ def parse_tseries_xml(xml_path):
         'laser_power':       {},   # keyed by laser description string
         'pmt_gain':          {},   # keyed by PMT description string
         'bit_depth':         None,
+        'markpoints_trigger_override': '',
     }
+
+    mp = root.find('.//MarkPoints')
+    if mp is not None:
+        params['markpoints_trigger_override'] = mp.get('triggerModeOverride', '')
 
     # Scalar string→float mappings for simple PVStateValue elements
     _scalar_map = {
@@ -128,7 +135,9 @@ def parse_markpoints_xml(xml_path):
             uncaging_laser (str)
             uncaging_laser_power (float)   — mW
             repetitions (int)
-            trigger_frequency (str)
+            trigger_frequency (str)        — 'FirstRepetition' / 'EveryRepetition' / ...
+            trigger_selection (str)        — e.g. 'TrigIn', 'PFI1', 'None'
+            trigger_count (int)
             galvo (dict):
                 initial_delay_ms (float)
                 inter_point_delay_ms (float)
@@ -159,6 +168,8 @@ def parse_markpoints_xml(xml_path):
             'uncaging_laser_power': _safe_float(mp_elem.get('UncagingLaserPower', 0)),
             'repetitions':          int(mp_elem.get('Repetitions', 1)),
             'trigger_frequency':    mp_elem.get('TriggerFrequency', ''),
+            'trigger_selection':    mp_elem.get('TriggerSelection', ''),
+            'trigger_count':        int(mp_elem.get('TriggerCount', 1)),
             'galvo':                {},
             'points':               [],
         }

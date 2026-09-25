@@ -110,6 +110,7 @@ For 2P opto experiments the result dict contains two dF/F arrays:
 
 MarkPoints group metadata is stored under `result['Bruker_Acq']`:
 - `result['Bruker_Acq']['markpoints_group_info']` — `(n_conditions, 4)` float array. One row per XML MarkPoints Group (condition). Columns: `[condition_idx, unique_group_id, n_targets, dispersion_um]`. Conditions whose target coordinates are 100% overlapping (e.g. an 80 mW group paired with a 0 mW sham) share the same `unique_group_id`. `dispersion_um` is the std of pairwise distances between target centres in µm (0 for a single-target group).
+- `markpoints_iterations`, `markpoints_repetitions`, `markpoints_trigger_frequency`, `markpoints_trigger_selection`, `markpoints_trigger_count`, `markpoints_trigger_override` — the MarkPoints trigger settings (one entry per condition, in firing order; strings as bytes). The analysis uses them to work out which condition each photostim TTL fired (`apply_markpoints_labels`).
 
 ---
 
