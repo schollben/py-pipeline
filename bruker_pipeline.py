@@ -77,6 +77,7 @@ def process_experiment(
     opto_pre_sec   = 0.5,
     do_plot               = False,
     do_vrec_diagnostic    = False,
+    do_opto_trial_images  = False,
     chunk_size            = 1000,
     output_dir            = DEFAULT_OUTPUT,
     skewness_threshold    = 1.0,
@@ -108,6 +109,10 @@ def process_experiment(
         Seconds after blanking window to average for opto response image.
     opto_pre_sec : float
         Seconds before trigger onset to average for opto baseline image.
+    do_opto_trial_images : bool
+        True to compute per-trial opto % change images (first 5 trials per
+        photostim group) and save them as a TIFF stack. Off by default until
+        photostim artifacts / trigger alignment are fixed.
     do_plot : bool
         True to generate and save a diagnostic summary figure.
     chunk_size : int
@@ -153,6 +158,7 @@ def process_experiment(
             'do_neuropil':        do_neuropil,
             'do_plot':            do_plot,
             'do_vrec_diagnostic': do_vrec_diagnostic,
+            'do_opto_trial_images': do_opto_trial_images,
             'dur_resp':           dur_resp,
             'opto_post_sec':      opto_post_sec,
             'opto_pre_sec':       opto_pre_sec,
@@ -750,7 +756,7 @@ def process_experiment(
     # -----------------------------------------------------------------------
     # Initialise opto keys to None (markpoints_* keys are initialised in Step 3b
     # and must NOT be reset here — they are populated regardless of vrec)
-    for key in ('photostim_2p_frame', 'opto_delta_images',
+    for key in ('photostim_2p_frame',
                 'opto_trial_delta_images', 'cyc_photostim_only'):
         result[key] = None
 
@@ -781,8 +787,9 @@ def process_experiment(
         # cyc uses NaN-blanked traces. Reuse it here for downstream opto analyses.
         dff_nan = result['dff_nan']
 
-        # Group delta images by photostim group = target_number (PsychoPy col 0),
-        # averaging over the other stim dimensions. Populated whenever stim_file > -1.
+        # Group photostim events by target_number (PsychoPy col 0). Populated whenever
+        # stim_file > -1. NOTE: target_number is saved unshifted — the known 1-row
+        # photostim trigger offset is not corrected here (to be handled in analysis).
         opto_group_id = result.get('target_number')
         if opto_group_id is None:
             opto_group_id = result.get('stim_id')
@@ -803,61 +810,34 @@ def process_experiment(
         n_opto_ids      = len(opto_unique_ids)
         result['opto_unique_ids'] = opto_unique_ids
 
-        # Baseline: mean of frames at recording seconds 1–5
-        print('Computing opto baseline (recording seconds 1–5)...')
-        bl_start = int(round(1.0 / frame_period))
-        bl_end   = int(round(5.0 / frame_period))
-        opto_baseline = np.mean(h[dat_name][bl_start:bl_end], axis=0).astype(float)
+        # ── per-trial delta images: first 5 trials per group (optional) ─────
+        # (early seconds-1–5 baseline is most valid for the earliest photostims)
+        if do_opto_trial_images:
+            # Baseline: mean of frames at recording seconds 1–5
+            print('Computing opto baseline (recording seconds 1–5)...')
+            bl_start = int(round(1.0 / frame_period))
+            bl_end   = int(round(5.0 / frame_period))
+            opto_baseline = np.mean(h[dat_name][bl_start:bl_end], axis=0).astype(float)
 
-        # Per-stim-ID post averages → delta images
-        print('Computing per-stim-ID opto % change images...')
-        opto_avg_imgs = np.zeros((n_opto_ids, size_x, size_y))
-
-        for oi, sid in enumerate(tqdm(opto_unique_ids,
-                                       desc='Opto delta images', ncols=75)):
-            events   = np.where(opto_group_id == sid)[0][:5]
-            post_acc = np.zeros((size_x, size_y))
-            cnt      = 0
-            for ev in events:
-                f0        = int(photostim_2p_frame[ev])
+            print('Computing per-trial opto delta images (first 5 trials/group)...')
+            keep_events = np.sort(np.concatenate([
+                np.where(opto_group_id == sid)[0][:5] for sid in opto_unique_ids
+            ])) if len(opto_unique_ids) else np.array([], dtype=int)
+            trial_delta_list = []
+            for ti in keep_events:
+                f0         = int(photostim_2p_frame[ti])
                 post_start = f0 + opto_blank_frames
                 post_stop  = f0 + opto_blank_frames + opto_post_frames
                 if post_stop > num_frames:
                     continue
-                post_acc += np.mean(h[dat_name][post_start:post_stop], axis=0)
-                cnt      += 1
-            if cnt > 0:
-                opto_avg_imgs[oi] = post_acc / cnt
-
-        with np.errstate(invalid='ignore', divide='ignore'):
-            opto_delta_imgs = np.where(
-                opto_baseline != 0,
-                (opto_avg_imgs - opto_baseline) / opto_baseline,
-                0.0,
-            )
-        result['opto_delta_images'] = opto_delta_imgs
-
-        # ── per-trial delta images: first 5 trials per group only ────────────
-        # (early seconds-1–5 baseline is most valid for the earliest photostims)
-        print('Computing per-trial opto delta images (first 5 trials/group)...')
-        keep_events = np.sort(np.concatenate([
-            np.where(opto_group_id == sid)[0][:5] for sid in opto_unique_ids
-        ])) if len(opto_unique_ids) else np.array([], dtype=int)
-        trial_delta_list = []
-        for ti in keep_events:
-            f0         = int(photostim_2p_frame[ti])
-            post_start = f0 + opto_blank_frames
-            post_stop  = f0 + opto_blank_frames + opto_post_frames
-            if post_stop > num_frames:
-                continue
-            post_avg = np.mean(h[dat_name][post_start:post_stop], axis=0).astype(float)
-            with np.errstate(invalid='ignore', divide='ignore'):
-                trial_delta_list.append(np.where(
-                    opto_baseline != 0,
-                    (post_avg - opto_baseline) / opto_baseline, 0.0,
-                ).astype(np.float32))
-        result['opto_trial_delta_images'] = (
-            np.stack(trial_delta_list) if trial_delta_list else None)
+                post_avg = np.mean(h[dat_name][post_start:post_stop], axis=0).astype(float)
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    trial_delta_list.append(np.where(
+                        opto_baseline != 0,
+                        (post_avg - opto_baseline) / opto_baseline, 0.0,
+                    ).astype(np.float32))
+            result['opto_trial_delta_images'] = (
+                np.stack(trial_delta_list) if trial_delta_list else None)
 
         # ── cyc_photostim_only: (n_cells, n_groups, max_trials) ─────────────
         # Per-trial, per-cell dF/F response = mean(post-blank) - mean(pre)
@@ -928,9 +908,6 @@ def process_experiment(
     if do_plot:
         fig1_path = os.path.join(output_dir, f'{experiment_id}_summary.png')
         plot_experiment_summary(result, save_path=fig1_path)
-        if result.get('params', {}).get('is_2p_opto') and result.get('opto_delta_images') is not None:
-            fig2_path = os.path.join(output_dir, f'{experiment_id}_opto_images.png')
-            plot_opto_images(result, save_path=fig2_path)
         plt.show()
 
     # -----------------------------------------------------------------------
@@ -1464,60 +1441,6 @@ def plot_experiment_summary(result, save_path=None):
     if save_path:
         fig.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f'Summary figure saved: {save_path}')
-
-
-def plot_opto_images(result, save_path=None):
-    """
-    Figure 2 — per-stim-ID % change images.
-    One subplot per entry in opto_delta_images. Shared red–blue colorscale,
-    0 % = white.
-    """
-    opto_delta      = result.get('opto_delta_images')
-    opto_unique_ids = result.get('opto_unique_ids')
-    experiment_id   = result.get('info', {}).get('experiment_id', '')
-
-    if opto_delta is None or len(opto_delta) == 0:
-        print('[plot_opto_images] No opto delta images to plot.')
-        return
-
-    n_ids  = len(opto_delta)
-    n_cols = min(n_ids, 5)
-    n_rows = math.ceil(n_ids / n_cols)
-
-    # Shared symmetric colorscale across all panels
-    vlim = 0.5   # default to 50% change; adjust as needed for visibility
-
-    fig, axes = plt.subplots(n_rows, n_cols,
-                              figsize=(5 * n_cols, 4.5 * n_rows),
-                              constrained_layout=True,
-                              squeeze=False)
-
-    im = None
-    for oi in range(n_ids):
-        row = oi // n_cols
-        col = oi %  n_cols
-        ax  = axes[row, col]
-        im  = ax.imshow(opto_delta[oi], cmap='bwr',
-                        vmin=-vlim, vmax=vlim,
-                        interpolation='nearest')
-        sid_label = int(opto_unique_ids[oi]) if opto_unique_ids is not None else oi + 1
-        ax.set_title(f'Group {sid_label}', fontsize=10)
-        ax.axis('off')
-
-    # Hide unused axes
-    for oi in range(n_ids, n_rows * n_cols):
-        axes[oi // n_cols, oi % n_cols].set_visible(False)
-
-    if im is not None:
-        fig.colorbar(im, ax=axes, label='% change from baseline',
-                     fraction=0.02, pad=0.02, shrink=0.6)
-
-    fig.suptitle(f'{experiment_id} — '
-                 f'2P opto % change images', fontsize=11)
-
-    if save_path:
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f'Opto image figure saved: {save_path}')
 
 
 # ===========================================================================
