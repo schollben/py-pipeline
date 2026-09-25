@@ -52,8 +52,8 @@ dat.dist = squareform(pdist(dat.roiLocs, metric='euclidean'))
 plot_avg_rois(dat,vmax_frac=0.6); 
 
 # check for a spurious first TTL pair (opto artifact) before building cyc.
-# An artifact also implies the psychopy target row offset, which must be
-# removed before dropFirstEvents.
+# The spurious event can also fire the SLM photostim accidentally, consuming the
+# first psychopy target row, so apply_psychopy_offset must run before dropFirstEvents.
 if check_event_alignment(dat):
     apply_psychopy_offset(dat)
     dropFirstEvents(dat)
