@@ -10,6 +10,7 @@ from analysis.photostim import influence_by_contrast, photostim_group_map
 sns.set_theme(context='notebook', style='white')
 sns.set_theme(style='ticks')
 from analysis import (load_session, check_event_alignment, dropFirstEvents,
+                      apply_psychopy_offset, check_real_sham_ordering,
                       rebuild_cyc, compute_responses, compute_snr,plot_avg_rois,
                       plot_stim_traces, plot_tuning_curves, compute_selectivity,
                       plot_preference_maps, describe_photostim_groups,
@@ -50,6 +51,10 @@ dat.dist = squareform(pdist(dat.roiLocs, metric='euclidean'))
 # show average image with ROI mask
 plot_avg_rois(dat,vmax_frac=0.6); 
 
+# psychopy target row offset: decided per session in info.getPsychopyOffset
+# (must run before dropFirstEvents)
+if info.getPsychopyOffset(session_name):
+    apply_psychopy_offset(dat)
 # check for a spurious first TTL pair before building cyc
 if check_event_alignment(dat):
     dropFirstEvents(dat)
@@ -97,6 +102,7 @@ for n in remove_rois:
 # %% photostimulation group dF/F activity
 
 describe_photostim_groups(dat)
+check_real_sham_ordering(dat)   # False -> real/sham swapped: revisit getPsychopyOffset
 plot_photostim_target_traces(dat, baseline=baseline, peak=peak); 
 
 
