@@ -128,21 +128,19 @@ The 400 ms blanking window skips frames where the microscope shutter is closed d
 
 ### VoltageRecording channel layout
 
-| Layout | Visual trigger col | Photostim col |
-|--------|--------------------|---------------|
-| Old    | 1                  | 2             |
-| New    | 2                  | 3             |
+| Layout | Visual trigger col | Photostim col | Sessions |
+|--------|--------------------|---------------|----------|
+| Old    | 1 (Input 0)        | 2 (Input 1)   | Nov 2024 |
+| New    | 2 (Input 1)        | 3 (Input 2)   | 2025 on  |
 
-**The layout is NOT auto-detected.** `detect_vrec_channel_layout` **hardcodes the NEW layout**
-(`vis_ch = 2`, `opto_ch = 3`); all current acquisitions use it. Events are detected on *every*
-column regardless (stored in `vrec_channel_events`); `vis_ch`/`opto_ch` only select the
-named-variable outputs.
-
-For the rare **OLD** recording (`vis=1`, `opto=2`), the channels must be hardcoded by hand in
-`detect_vrec_channel_layout` (the "Visual stim is always Input 1" / "Photostim: hardcoded" lines).
-To help spot these, when `is_2p_opto=True` the function prints a `[WARNING]` if the event counts
-look like an OLD-layout session (the hardcoded photostim channel col 3 is near-silent while col 2
-carries the photostim train) and names the line to edit.
+The spare input carries a copy of the photostim pulse in both wirings.
+`detect_vrec_channel_layout` **detects the layout from pulse widths**: the visual line
+(PsychoPy RTS) is high for the whole stimulus (~1 s; ~5 s per trial in photostim-only runs),
+the photostim line (DTR) for 50 ms. The layout is OLD when Input 0 carries the widest pulses
+and they are at least 0.2 s; otherwise NEW (also the default when no input carries long
+pulses, e.g. spontaneous runs). Both channels move together. The median widths and the
+chosen layout are printed. Events are detected on *every* column regardless (stored in
+`vrec_channel_events`); `vis_ch`/`opto_ch` only select the named-variable outputs.
 
 ---
 
