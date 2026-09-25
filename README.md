@@ -77,7 +77,6 @@ Additional `process_experiment` keyword arguments not exposed as constants in `r
 |---|---|---|
 | `do_neuropil` | `False` | Extract and subtract neuropil signal |
 | `do_vrec_diagnostic` | `False` | Plot first 60 s of voltage recording channels with detected triggers |
-| `opto_offset_trigger` | `True` | Compensates for known 1-row offset bug in photostim trigger stream — keep `True` until fixed in acquisition software |
 | `chunk_size` | `1000` | Frames processed at once during trace extraction |
 | `output_dir` | `PROCESSED/` | Directory for output H5 and figure files |
 | `skewness_threshold` | `1.0` | Skewness cutoff used to select cells |
@@ -145,8 +144,11 @@ Typical order of operations:
 - Some sessions contain a spurious first TTL pair — hence step 2.
 - Event timing can lead the stimulus by ~15 frames (PMT shutter appears to open *before*
   stimulus onset, which is not physically possible); correct with `offsetFrames` for now.
-- The photostim trigger stream is offset by 1 row relative to the PsychoPy file
-  (`opto_offset_trigger=True` in preprocessing).
+- The photostim trigger stream is offset by 1 row relative to the PsychoPy file.
+  Preprocessing no longer corrects this (`opto_offset_trigger` was removed; new H5
+  files store `target_number`/`target_trial` unshifted). **TODO:** migrate the
+  correction to an analysis-side function; `dropFirstEvents` still detects legacy
+  pre-dropped files by length.
 
 ---
 

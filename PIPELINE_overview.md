@@ -79,18 +79,17 @@ py-pipeline/
 12. (if is_2p_opto)
     map photostim triggers     → result['photostim_2p_frame']
                                → result['photostim_triggers_sec']
-    opto_baseline              → mean of frames at recording seconds 1–5
-                                 (internal; not stored in result)
     NaN-blank dff at opto pulse windows → dff_nan (used below + by skewness)
-    per-stim-ID post averages  → opto_delta_images  (% change vs baseline)
-    per-trial post averages    → opto_trial_delta_images (first 5 trials/group;
+    (if do_opto_trial_images)
+      opto_baseline            → mean of frames at recording seconds 1–5
+                                 (internal; not stored in result)
+      per-trial post averages  → opto_trial_delta_images (first 5 trials/group;
                                  also saved as a float32 TIFF stack)
     per-trial dF/F matrix      → cyc_photostim_only (n_cells × n_groups × max_trials)
 12b. Cell-quality skewness     → dff_skewness, is_good_cell (skew of dff_nan/dff
                                  per cell vs skewness_threshold)
 13. save_result_h5()           → write result to {experiment_id}.h5
 14. (if do_plot) plot_experiment_summary()  → {experiment_id}_summary.png
-    (if is_2p_opto) plot_opto_images()      → {experiment_id}_opto_images.png
     (if do_vrec_diagnostic) plot_vrec_diagnostic() → {experiment_id}_vrec_diagnostic.png
 15. print_experiment_summary()
 16. return result dict
@@ -112,7 +111,7 @@ This ensures correct behaviour across scanning rates (30 Hz, 7 Hz multi-ROI, etc
 
 vrec is loaded for every experiment (hard error if CSV is missing). `_detect_vrec_events` runs on every channel and stores onsets in `vrec_channel_events`, keyed by column index. Named convenience variables (`stim_on_2p_frame`, `photostim_triggers_sec`) are derived from this.
 
-### Opto % change images
+### Opto per-trial % change images (`do_opto_trial_images=True`)
 
 Baseline is the mean of frames at recording **seconds 1–5** (hardcoded; avoids pre-trigger window computation):
 
@@ -120,7 +119,10 @@ Baseline is the mean of frames at recording **seconds 1–5** (hardcoded; avoids
 [0s, 1s)  skipped   [1s, 5s)  opto_baseline   ...   [f+blank, f+blank+post)  response
 ```
 
-`opto_delta_images = (post_avg − opto_baseline) / opto_baseline`
+`opto_trial_delta_images = (post_avg − opto_baseline) / opto_baseline`, per trial.
+
+Events are grouped by `target_number`, which is saved unshifted — the known 1-row
+photostim trigger offset is not corrected in preprocessing (to be handled in analysis).
 
 The 400 ms blanking window skips frames where the microscope shutter is closed during photostimulation.
 
@@ -193,7 +195,7 @@ result = {
         'opto_post_sec':      float,
         'opto_pre_sec':       float,
         'opto_blank_sec':     float,
-        'opto_offset_trigger':bool,
+        'do_opto_trial_images': bool,
         'chunk_size':         int,
         'skewness_threshold': float,  # dff_skewness cutoff for is_good_cell
         'dff_window_frames':  int,    # baseline window for dF/F computation
@@ -263,11 +265,10 @@ result = {
     # ── 2P opto images and responses (opto only) ─────────────────────────
     # populated only if is_2p_opto=True and opto_ch detected:
     'opto_unique_ids':    np.ndarray,  # sorted unique opto group IDs (= target_number)
-    'opto_delta_images':  np.ndarray,  # (n_groups, size_x, size_y)
-                                       # % change = (post_avg - baseline) / baseline
-                                       # baseline = mean of recording seconds 1–5
     'opto_trial_delta_images': np.ndarray,  # (n_kept_trials, size_x, size_y) per-trial
-                                       # % change, first 5 trials/group; also written as a
+                                       # only if do_opto_trial_images=True (else None)
+                                       # % change vs baseline (mean of recording seconds 1–5),
+                                       # first 5 trials/group; also written as a
                                        # float32 TIFF stack ({experiment_id}_opto_trial_delta_images.tif)
     'cyc_photostim_only': np.ndarray,  # (n_rois, n_groups, max_trials) NaN-padded
                                        # value = mean(post) - mean(pre) dF/F per trial
@@ -291,7 +292,6 @@ fp = result['Bruker_Acq']['frame_period']
 assert abs(result['frame_times_sec'][-1] - result['dff'].shape[0] * fp) < 1
 
 # Opto
-assert result['opto_delta_images'].ndim == 3   # (n_groups, H, W)
 assert result['cyc_photostim_only'].ndim == 3  # (n_rois, n_groups, max_trials)
 
 # H5 output
