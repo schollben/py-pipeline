@@ -7,11 +7,11 @@ import plotly.graph_objects as go
 dirLoc = '/mnt/bigdata/PROCESSED/' # update for your computer
 # FNAME = dirLoc + 'TSeries-07132025-1042-003.h5'
 # FNAME = dirLoc + 'TSeries-07212026-1350-001.h5'
-FNAME = dirLoc + 'TSeries-07132025-1042-001.h5'
+FNAME = dirLoc + 'TSeries-11032024-1313-003.h5'
 
-OFFSET = 15
+OFFSET = 30
 ROI = 21
-frameStart, frameEnd = 0, 2000
+frameStart, frameEnd = 0, 500
 
 with h5py.File(FNAME, 'r') as f:
     dff = f['dff'][frameStart:frameEnd, ROI]

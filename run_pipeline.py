@@ -6,16 +6,15 @@ from bruker_pipeline import process_experiment
 
 # Set parameters for the experiment to process
 DATE            = '07132025'    # acquisition date, format MMDDYYYY
-FILE_NUM        = 16            # TSeries number (e.g. 3 → matches folder ending in -003)
-STIM_FILE       = 11            # PsychoPy file, Set to -1 if there is no stimulus file.
+FILE_NUM        = 3            # TSeries number (e.g. 3 → matches folder ending in -003)
+STIM_FILE       = 2            # PsychoPy file, Set to -1 if there is no stimulus file.
 USE_INFERENCE   = True         # True  → use inference.h5
 DUR_RESP        = 2             # Response window duration in seconds to build the trial-averaged response matrix (cyc)
-PRE_RESP        = 1             # Pre-stimulus window duration in seconds prepended to each cyc trial (0 = no pre)
+PRE_RESP        = 0.5             # Pre-stimulus window duration in seconds prepended to each cyc trial (0 = no pre)
 
 IS_2P_OPTO      = True          # True  → experiment includes 2-photon photostimulation (optogenetics), Will read MarkPoints XML
 OPTO_POST_SEC   = 1             # seconds after the blanking window to average (response)
 OPTO_PRE_SEC    = 0.5           # seconds before trigger onset to average (baseline)
-DO_OPTO_TRIAL_IMAGES = False    # True → save per-trial opto % change images (first 5 trials/group) as a TIFF stack
 
 DO_PLOT         = True          # True → generate and save a summary figure (ROIs, MarkPoints).
 
@@ -34,7 +33,7 @@ if __name__ == '__main__':
         opto_pre_sec         = OPTO_PRE_SEC,
         do_plot              = DO_PLOT,
         do_vrec_diagnostic   = False,
-        do_opto_trial_images = DO_OPTO_TRIAL_IMAGES,
+        do_opto_trial_images = False,
         skewness_threshold   = 1,
         n_plot_cells         = 15,
     )
