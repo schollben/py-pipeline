@@ -77,7 +77,6 @@ def process_experiment(
     opto_pre_sec   = 0.5,
     do_plot               = False,
     do_vrec_diagnostic    = False,
-    opto_offset_trigger   = True,
     chunk_size            = 1000,
     output_dir            = DEFAULT_OUTPUT,
     skewness_threshold    = 1.0,
@@ -111,11 +110,6 @@ def process_experiment(
         Seconds before trigger onset to average for opto baseline image.
     do_plot : bool
         True to generate and save a diagnostic summary figure.
-    opto_offset_trigger : bool
-        True (default) to discard the first row of the PsychoPy file for 2P
-        opto experiments. A known acquisition bug causes the trigger stream to
-        be offset by one: photostim trigger 0 corresponds to psychopy row 1,
-        trigger 1 to row 2, etc. Set to False once the bug is fixed upstream.
     chunk_size : int
         Number of frames to process at once during trace extraction.
     output_dir : str
@@ -162,7 +156,6 @@ def process_experiment(
             'dur_resp':           dur_resp,
             'opto_post_sec':      opto_post_sec,
             'opto_pre_sec':       opto_pre_sec,
-            'opto_offset_trigger':opto_offset_trigger,
             'chunk_size':         chunk_size,
         },
     }
@@ -250,8 +243,6 @@ def process_experiment(
                 psychopy_data = np.genfromtxt(psychopy_path)
                 if psychopy_data.ndim == 1:
                     psychopy_data = psychopy_data[np.newaxis, :]
-                if is_2p_opto and opto_offset_trigger:
-                    psychopy_data = psychopy_data[1:]
                 stim_id = psychopy_data[:, 0]
                 result['stim_id']      = stim_id
                 result['unique_stims'] = np.unique(stim_id)
@@ -630,7 +621,7 @@ def process_experiment(
 
     if opto_ch is not None:
         # Drop the erroneous early photostim trigger (gap > 2× median ITI), same as
-        # the visual channel. Kept independent of opto_offset_trigger (PsychoPy row-drop).
+        # the visual channel.
         opto_onsets_sec = vrec_channel_events[opto_ch]['onsets_sec']
         opto_onsets     = vrec_channel_events[opto_ch]['onsets']
         if len(opto_onsets_sec) > 1:
@@ -664,19 +655,14 @@ def process_experiment(
                 result['stim_properties'] = stim_properties
             else:
                 # 2P opto: columns are [target_number, target_trial, (vis_stim_id), ...]
-                # Known acquisition bug: photostim trigger stream is offset by one row.
-                # Apply the row-drop only to the photostim columns (0, 1); the visual
-                # stim column (2) is aligned with vis triggers and must NOT be shifted.
-                opto_data = psychopy_data[1:] if opto_offset_trigger else psychopy_data
-                if opto_offset_trigger:
-                    print(f'[opto_offset_trigger=True] Dropping first PsychoPy row for '
-                          f'photostim columns ({psychopy_data.shape[0]} → {opto_data.shape[0]} rows).')
-                result['target_number'] = opto_data[:, 0]
-                result['target_trial']  = opto_data[:, 1]
+                # Saved raw (no row shift). The known 1-row photostim trigger offset
+                # is corrected in the analysis stage, not here.
+                result['target_number'] = psychopy_data[:, 0]
+                result['target_trial']  = psychopy_data[:, 1]
                 if psychopy_data.shape[1] >= 3:
                     stim_id = psychopy_data[:, 2]
                 else:
-                    stim_id = opto_data[:, 0]
+                    stim_id = psychopy_data[:, 0]
                 if psychopy_data.shape[1] > 3:
                     result['stim_properties'] = psychopy_data[:, 3:]
 
@@ -1189,7 +1175,6 @@ def print_experiment_summary(result):
         # Trigger count vs stim file rows
         stim_id_arr = result.get('stim_id')
         n_stim_rows = len(stim_id_arr) if stim_id_arr is not None else None
-        opto_offset = params.get('opto_offset_trigger', False)
         if ps_trig_sec is not None:
             n_trig = len(ps_trig_sec)
             if n_stim_rows is not None:
