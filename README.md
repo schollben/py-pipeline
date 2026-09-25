@@ -135,8 +135,11 @@ Typical order of operations:
 4. `plot_stim_traces` to read baseline/peak windows off the plot, then
    `compute_responses(dat, baseline=, peak=)`.
 5. `plot_tuning_curves`, `compute_selectivity` (gDSI/gOSI), `plot_preference_maps`.
-6. Photostim: `describe_photostim_groups`, `plot_photostim_group_heatmaps`,
-   `plot_photostim_target_traces`.
+6. Photostim: `describe_photostim_groups`, `check_real_sham_ordering(dat, baseline=, peak=)`,
+   `plot_photostim_group_heatmaps`, `plot_photostim_target_traces`. Shams are never paired
+   per group: every sham (0 mW) trial measures the same null, so all real-vs-sham
+   comparisons (checks, target traces, influence) use the pooled sham
+   (`sham_target_numbers`).
 7. Influence: `influence_grand`, `influence_by_stim`, `influence_bootstrap`, and the
    matching `plot_influence_maps` / `plot_influence_by_contrast`.
 
