@@ -20,7 +20,8 @@ from analysis import info
 ################################################################
 
 # session_name = 'TSeries-07132025-1042-003.h5'
-session_name = 'TSeries-11032024-1313-007.h5'
+# session_name = 'TSeries-11032024-1313-007.h5'
+session_name = 'TSeries-11032024-1313-003.h5'
 # session_name = 'TSeries-11052025-1650-004.h5'
 folderName = '/mnt/bigdata/PROCESSED'
 FNAME = folderName + '/' + session_name
