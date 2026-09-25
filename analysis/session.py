@@ -222,6 +222,12 @@ def cyc_onset(s):
     return s.cyc.shape[3] - int(round(s.dur_resp / s.frame_period)) - 1
 
 
+# TODO: migrate the photostim trigger offset "fix" here. The pipeline used to drop
+# the first PsychoPy row from target_number/target_trial (`opto_offset_trigger`,
+# a known 1-row offset between the photostim trigger stream and the PsychoPy
+# file). That was removed from bruker_pipeline so new H5 files are unshifted;
+# the correction must be rebuilt as an analysis-side step alongside
+# check_event_alignment / dropFirstEvents.
 def check_event_alignment(s, n_show=5):
     """Diagnose whether the first visual/photostim TTL pair looks spurious.
 
@@ -230,12 +236,13 @@ def check_event_alignment(s, n_show=5):
     trigger fires in lockstep with the very first visual trigger, well before
     the real trial train begins (the pipeline's own "drop erroneous first
     trigger" check, bruker_pipeline.py:624, tests the gap in raw vrec seconds
-    and can fail to catch it). `target_number` is separately shifted by the
-    pipeline's `opto_offset_trigger` psychopy row-drop (bruker_pipeline.py:674),
-    which only ever applies to the photostim label columns — so when both
-    conditions are present, `stim_id` (visual) is off by one against the
+    and can fail to catch it). In LEGACY H5 files, `target_number` was also
+    shifted by the pipeline's (since removed) `opto_offset_trigger` psychopy
+    row-drop, which only ever applied to the photostim label columns — so when
+    both conditions are present, `stim_id` (visual) is off by one against the
     untrimmed `stim_on_2p_frame`, while `target_number` (photostim) is already
-    correctly aligned to the untrimmed `photostim_2p_frame`. See `dropFirstEvents`.
+    correctly aligned to the untrimmed `photostim_2p_frame`. Files produced by the
+    current pipeline save `target_number` unshifted. See `dropFirstEvents`.
 
     The primary signal is the photostim lag, `photostim_2p_frame - stim_on_2p_frame`,
     tested against the session's OWN distribution rather than a fixed value. A real
@@ -252,7 +259,7 @@ def check_event_alignment(s, n_show=5):
         - first stim_on ITI vs the median of the rest (flagged if > 2x)
         - the length signature (len(pf) > len(son), len(tn) == len(stim_id) - 1)
         - target_number[0], informational only (1 = no psychopy row-offset applied,
-          2 = applied); it corroborates but no longer drives the decision, since it
+          2 = legacy row-offset applied); it corroborates but no longer drives the decision, since it
           assumes the group cycle starts at 1
 
     Returns True when dropFirstEvents(s) is recommended — the lag outlier plus at
@@ -292,7 +299,8 @@ def check_event_alignment(s, n_show=5):
               f'of the rest ({"LOCKSTEP OUTLIER" if lag_outlier else "normal"})')
 
     # length signature: the glitch adds a photostim TTL that psychopy never logged,
-    # and the pipeline's row-drop already shortened target_number by one.
+    # and (legacy H5 files only) the pipeline's row-drop already shortened
+    # target_number by one.
     pf_longer = pf is not None and len(pf) > len(son)
     tn_pre_dropped = len(tn) == len(s.stim_id) - 1
     print(f'  lengths: stim_id={len(s.stim_id)} stim_on={len(son)} '
@@ -300,7 +308,7 @@ def check_event_alignment(s, n_show=5):
           f'{"  [pf longer than stim_on]" if pf_longer else ""}'
           f'{"  [target_number pre-dropped]" if tn_pre_dropped else ""}')
     print(f'  target_number[0] = {tn[0]:g} (informational; '
-          f'{"psychopy row-offset already applied" if tn[0] == 2 else "no offset applied"})')
+          f'{"legacy psychopy row-offset already applied" if tn[0] == 2 else "no offset applied"})')
 
     recommend = bool(lag_outlier and (first_anomalous or pf_longer or tn_pre_dropped))
     if recommend:
@@ -325,15 +333,16 @@ def dropFirstEvents(s):
     `cyc_trial_group` pairs `target_number[i]` with `stim_id[i]` to fill cyc trial
     slots — it never indexes `photostim_2p_frame`. Two cases:
 
-      - The pipeline's `opto_offset_trigger` psychopy row-drop
-        (bruker_pipeline.py:674) already removed `target_number[0]`, so the array
+      - LEGACY H5 files: the pipeline's (since removed) `opto_offset_trigger`
+        psychopy row-drop already removed `target_number[0]`, so the array
         arrives one short (`len(tn) == len(stim_id) - 1`). That row-drop aligned it
         to the UNTRIMMED presentations (`tn[i]` describes raw presentation `i`,
         verified on raw dff: real groups drive their targets 4-10x harder than sham
         under this pairing and the reverse under any other). Post-drop `stim_id[i]`
         describes raw presentation `i + 1`, so `target_number`/`target_trial` must
         lose one more leading entry to land on the same presentation.
-      - No row-drop was applied (`len(tn) == len(stim_id)`): `target_number` still
+      - No row-drop was applied (`len(tn) == len(stim_id)`; all files from the
+        current pipeline): `target_number` still
         carries the spurious event's own entry, so drop that one instead — the same
         single leading drop, reached from a different starting length.
 
@@ -361,7 +370,7 @@ def dropFirstEvents(s):
         if s.target_trial is not None:
             s.target_trial = s.target_trial[1:]
         note = ('; dropped target_number[0]/target_trial[0] '
-                + ('(on top of the upstream psychopy row-drop)' if pre_dropped
+                + ('(on top of the legacy upstream psychopy row-drop)' if pre_dropped
                    else '(no upstream row-drop)'))
     if s.photostim_2p_frame is not None and s.target_number is not None:
         s.photostim_2p_frame = s.photostim_2p_frame[1:][:len(s.target_number)]
