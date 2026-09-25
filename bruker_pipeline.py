@@ -559,8 +559,6 @@ def process_experiment(
 
     result['dff'] = dff
     result['baselines'] = baselines
-    result['params']['dff_window_frames'] = dff_window
-    result['params']['dff_window_sec']    = dff_window * frame_period
     if do_neuropil:
         result['dff_neuropil'] = dff_neuropil
 
