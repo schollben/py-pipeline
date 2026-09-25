@@ -12,10 +12,11 @@ def getOffsetFrames(session_name):
     offset_frames['TSeries-07132025-1042-009.h5'] = -15
     offset_frames['TSeries-07132025-1042-012.h5'] = -15
 
-    offset_frames['TSeries-11032024-1313-001.h5'] = -(10 + 150) #lost first event??
-    offset_frames['TSeries-11032024-1313-003.h5'] = -10 #lost first event?? 
-    offset_frames['TSeries-11032024-1313-007.h5'] = -10 #lost first event?? 
+    offset_frames['TSeries-11032024-1313-003.h5'] = -10 
+    offset_frames['TSeries-11032024-1313-007.h5'] = -15
     offset_frames['TSeries-11032024-1313-012.h5'] = -10
+
+    offset_frames['TSeries-11052025-1650-004.h5'] = -15
 
     offset_frames['TSeries-07212026-1350-003.h5'] = -15
 
@@ -30,6 +31,7 @@ def removeROIs(session_name):
 
         roi = {}
         roi['TSeries-07132025-1042-003.h5'] = [54]
+
         roi['TSeries-11032024-1313-001.h5'] = []
         roi['TSeries-11032024-1313-003.h5'] = []
 
@@ -43,6 +45,7 @@ def removeROIs(session_name):
 def getWindow(session_name):
 
     windows = {}
+
     windows['TSeries-11032024-1313-001.h5'] = ((0, 0.2), (0.9, 1.1)) #spontaneous
     windows['TSeries-11032024-1313-003.h5'] = ((0, 0.2), (1.15, 1.4))
 

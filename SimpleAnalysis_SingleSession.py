@@ -15,13 +15,13 @@ from analysis import (load_session, check_event_alignment, dropFirstEvents,
                       plot_stim_traces, plot_tuning_curves, compute_selectivity,
                       plot_preference_maps, describe_photostim_groups,
                       plot_photostim_target_traces, influence_grand, influence_by_contrast,
-                      influence_by_stim, influence_bootstrap,
-                      plot_influence_maps, plot_influence_by_contrast)
+                      influence_by_stim, plot_influence_maps, plot_influence_by_contrast)
 from analysis import info
 ################################################################
 
-session_name = 'TSeries-07132025-1042-006.h5'
-# session_name = 'TSeries-11032024-1313-012.h5'
+# session_name = 'TSeries-07132025-1042-003.h5'
+session_name = 'TSeries-11032024-1313-007.h5'
+# session_name = 'TSeries-11052025-1650-004.h5'
 folderName = '/mnt/bigdata/PROCESSED'
 FNAME = folderName + '/' + session_name
 
@@ -50,12 +50,12 @@ dat.dist = squareform(pdist(dat.roiLocs, metric='euclidean'))
 # show average image with ROI mask
 plot_avg_rois(dat,vmax_frac=0.6); 
 
-# check for a spurious first TTL pair (opto artifact) before building cyc.
-# An artifact also implies the psychopy target row offset, which must be
-# removed before dropFirstEvents.
-if check_event_alignment(dat):
-    # apply_psychopy_offset(dat)
-    dropFirstEvents(dat)
+# # check for a spurious first TTL pair (opto artifact) before building cyc.
+# # An artifact also implies the psychopy target row offset, which must be
+# # removed before dropFirstEvents.
+# apply_psychopy_offset(dat)
+# if check_event_alignment(dat):
+#     dropFirstEvents(dat)
 
 # photostimulation check
 if dat.has_photostim==False:
