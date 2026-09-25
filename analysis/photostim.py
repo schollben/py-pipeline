@@ -118,24 +118,39 @@ def cyc_trial_group(s):
     return grp
 
 
-def check_real_sham_ordering(s, base_sl=None, peak_sl=None, verbose=True):
-    """Sanity-check that each real group drives its targets harder than the
-    pooled sham.
+def check_real_sham_ordering(s, baseline=None, peak=None, base_sl=None,
+                             peak_sl=None):
+    """Check that each real group drives its targets harder than the pooled
+    sham, and print a one-line summary.
 
     A sham fires at 0 mW, so it cannot drive any ROI. If the pooled sham's mean
     response in a group's target ROIs exceeds that group's own, the
     trial<->target_number pairing is off (typically a leading-event/off-by-one
     bug upstream in `dropFirstEvents`) and every real/sham comparison downstream
-    is inverted.
+    is inverted. Only the sign is tested, so labels that are mixed rather than
+    swapped can pass by chance.
 
-    Returns True when all groups are ordered correctly, False otherwise. Warns on
-    each violation when `verbose`.
+    baseline, peak : measurement windows in seconds from the start of the cyc
+        window, as in `compute_responses` — pass the same values. `base_sl` /
+        `peak_sl` (frame slices) take precedence; with neither, the
+        `cyc_response_windows` defaults are used.
+
+    Prints e.g. `real > pooled sham in own targets: 7/7 groups`, naming any
+    failing groups. Returns True when every tested group passes.
     """
+    if not s.has_photostim:
+        print(f'{s.exp_id}: no photostimulation data in this session.')
+        return True
+    if not s.has_sham:
+        print(f'{s.exp_id}: no sham (0 mW) condition — nothing to check real vs '
+              f'sham against.')
+        return True
+
     gmap = photostim_group_map(s)
     grp = cyc_trial_group(s)
     shams = sham_target_numbers(s)
     if base_sl is None or peak_sl is None:
-        base_sl, peak_sl = cyc_response_windows(s)
+        base_sl, peak_sl = cyc_response_windows(s, baseline=baseline, peak=peak)
 
     def target_resp(rois, tn):
         si, ti = np.where(np.isin(grp, np.atleast_1d(tn)))
@@ -145,13 +160,7 @@ def check_real_sham_ordering(s, base_sl=None, peak_sl=None, verbose=True):
         return float(np.nanmean(np.nanmax(tr[..., peak_sl], axis=-1)
                                 - np.nanmean(tr[..., base_sl], axis=-1)))
 
-    if not s.has_sham:
-        if verbose:
-            print(f'{s.exp_id}: no sham condition in this session — nothing to '
-                  f'check real/sham ordering against.')
-        return True
-
-    ok = True
+    n_tested, failing = 0, []
     for real_tn, info in sorted(gmap.items()):
         rois = info['target_rois']
         if not len(rois):
@@ -159,14 +168,14 @@ def check_real_sham_ordering(s, base_sl=None, peak_sl=None, verbose=True):
         r, sh = target_resp(rois, real_tn), target_resp(rois, shams)
         if np.isnan(r) or np.isnan(sh):
             continue
+        n_tested += 1
         if r <= sh:
-            ok = False
-            if verbose:
-                print(f'[!] {s.exp_id}: group {real_tn:g} pooled sham response '
-                      f'({sh:+.4f}) exceeds real ({r:+.4f}) in its own targets — '
-                      f'real/sham are likely swapped; check dropFirstEvents / '
-                      f'event alignment.')
-    return ok
+            failing.append(real_tn)
+    fail_txt = (f'; failing groups: {", ".join(f"{t:g}" for t in failing)}'
+                if failing else '')
+    print(f'{s.exp_id}: real > pooled sham in own targets: '
+          f'{n_tested - len(failing)}/{n_tested} groups{fail_txt}')
+    return not failing
 
 
 def describe_photostim_groups(s):
@@ -990,7 +999,6 @@ def plot_photostim_target_traces(s, window=None, baseline_guard_sec=0.5,
     onset = cyc_onset(s)
     base_sl, peak_sl = cyc_response_windows(s, baseline_guard_sec, post_sec,
                                             baseline, peak)
-    check_real_sham_ordering(s, base_sl, peak_sl)
 
     if trial_range is not None:
         t_lo, t_hi = trial_range

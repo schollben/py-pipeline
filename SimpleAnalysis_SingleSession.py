@@ -101,7 +101,7 @@ for n in remove_rois:
 # %% photostimulation group dF/F activity
 
 describe_photostim_groups(dat)
-check_real_sham_ordering(dat)   # False -> real/sham swapped: check event alignment
+check_real_sham_ordering(dat, baseline=baseline, peak=peak)   # summary line; failing groups -> check event alignment
 plot_photostim_target_traces(dat, baseline=baseline, peak=peak); 
 
 
