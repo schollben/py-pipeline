@@ -128,8 +128,8 @@ dat = load_session('/path/to/PROCESSED/TSeries-07132025-1042-003.h5')
 Typical order of operations:
 
 1. `load_session` → a `Session` object (`dat`); `plot_avg_rois` to check the ROI mask.
-2. `apply_psychopy_offset` (if set in `info.getPsychopyOffset`), then
-   `check_event_alignment` / `dropFirstEvents` — detect and remove a spurious first TTL pair.
+2. `check_event_alignment`; if it flags the artifact, `apply_psychopy_offset` then
+   `dropFirstEvents` — remove the target row offset and the spurious first TTL pair.
 3. `rebuild_cyc(dat, preStim=, postStim=, offsetFrames=)` — rebuild the trial matrix from raw
    dF/F with wider windows. `offsetFrames` corrects residual event-timing lead/lag.
 4. `plot_stim_traces` to read baseline/peak windows off the plot, then
@@ -146,11 +146,12 @@ Typical order of operations:
 - Event timing can lead the stimulus by ~15 frames (PMT shutter appears to open *before*
   stimulus onset, which is not physically possible); correct with `offsetFrames` for now.
 - The photostim trigger stream can be offset by 1 row relative to the PsychoPy file.
-  Preprocessing saves `target_number`/`target_trial` unshifted. Whether a session
-  needs the first target row dropped (`[1,2,3,…] → [2,3,4,…]`) is decided per
-  session from the data: set it in `info.getPsychopyOffset`, which makes the
-  driver call `apply_psychopy_offset` before `dropFirstEvents`. Check the result
-  with `check_real_sham_ordering`. Legacy H5 files already have the row dropped.
+  Preprocessing saves `target_number`/`target_trial` unshifted. When
+  `check_event_alignment` detects the opto artifact, the driver calls
+  `apply_psychopy_offset` (drops the first target row, `[1,2,3,…] → [2,3,4,…]`)
+  before `dropFirstEvents`. `info.getPsychopyOffset` forces the offset on sessions
+  where no artifact is detected. Check the result with `check_real_sham_ordering`.
+  Legacy H5 files already have the row dropped.
 - Sessions without a sham (0 mW) group: every influence function falls back to
   `mode='zscore'` (each group vs. all photostim trials pooled). This needs at
   least two groups to be meaningful.

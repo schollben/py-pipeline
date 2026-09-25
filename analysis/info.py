@@ -25,7 +25,8 @@ def getOffsetFrames(session_name):
 
 
 def getPsychopyOffset(session_name):
-    # True -> drop the first psychopy target row (apply_psychopy_offset).
+    # True -> force apply_psychopy_offset on a session WITHOUT a detected artifact
+    # (sessions where check_event_alignment flags the artifact get it automatically).
     # Decide per session by looking at the data (check_real_sham_ordering, heatmaps).
     # Legacy H5 files already have the row dropped; no entry needed.
 

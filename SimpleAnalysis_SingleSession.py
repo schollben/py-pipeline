@@ -51,12 +51,13 @@ dat.dist = squareform(pdist(dat.roiLocs, metric='euclidean'))
 # show average image with ROI mask
 plot_avg_rois(dat,vmax_frac=0.6); 
 
-# psychopy target row offset: decided per session in info.getPsychopyOffset
-# (must run before dropFirstEvents)
-if info.getPsychopyOffset(session_name):
+# check for a spurious first TTL pair (opto artifact) before building cyc.
+# An artifact also implies the psychopy target row offset; info.getPsychopyOffset
+# forces the offset on sessions without one. The offset must run before dropFirstEvents.
+artifact = check_event_alignment(dat)
+if artifact or info.getPsychopyOffset(session_name):
     apply_psychopy_offset(dat)
-# check for a spurious first TTL pair before building cyc
-if check_event_alignment(dat):
+if artifact:
     dropFirstEvents(dat)
 # photostimulation check
 if dat.has_photostim==False:
